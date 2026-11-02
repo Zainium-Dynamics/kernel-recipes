@@ -1,0 +1,28 @@
+[package]
+name             = "linux-firmware"
+version          = "20261019"
+description      = "Firmware for desktop and laptop network, graphics, sound and other devices, zstd-compressed"
+license          = "custom: redistributable (see WHENCE)"
+maintainer       = "Zainium Dynamics <alizain@zainiumdynamics.tech>"
+homepage         = "https://gitlab.com/kernel-firmware/linux-firmware"
+build_type       = "noarch"
+libc_target      = "musl"
+
+blake3           = ""
+ed25519_sig      = ""
+ed25519_pubkey   = ""
+
+depends          = []
+provides         = ["linux-firmware", "firmware"]
+tags             = ["base", "kernel", "firmware"]
+
+[install]
+drivers = "/overlayer/syshub/drivers"
+_syshub = true
+
+[remove]
+files    = []
+dirs     = []
+symlinks = []
+
+[hooks]

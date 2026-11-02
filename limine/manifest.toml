@@ -1,0 +1,29 @@
+[package]
+name             = "limine"
+version          = "12.9.6"
+description      = "Limine boot loader: BIOS and UEFI x86-64 images and the limine install tool"
+license          = "BSD-2-Clause"
+maintainer       = "Zainium Dynamics <alizain@zainiumdynamics.tech>"
+homepage         = "https://limine-bootloader.org"
+build_type       = "dynamic"
+libc_target      = "musl"
+
+blake3           = ""
+ed25519_sig      = ""
+ed25519_pubkey   = ""
+
+depends          = ["musl"]
+provides         = ["limine"]
+tags             = ["base", "boot"]
+
+[install]
+bin     = "/overlayer/syshub/bin"
+share   = "/overlayer/syshub/share"
+_syshub = true
+
+[remove]
+files    = []
+dirs     = []
+symlinks = []
+
+[hooks]
