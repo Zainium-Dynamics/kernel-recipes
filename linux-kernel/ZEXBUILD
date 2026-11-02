@@ -14,6 +14,7 @@ makedepends="bash clang-dev flex bison bc perl python3 gawk sed rsync findutils 
 source="https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-$pkgver.tar.xz
 0001-zainium-system-paths.patch
 0002-zainium-module-dir.patch
+0003-ovl-sealed-mount.patch
 zainium.config"
 
 # Vanilla Linux with Zainium's system paths (firmware, shebangs, init, modprobe, poweroff)
@@ -39,7 +40,7 @@ build() {
 	RUSTFLAGS="-C target-feature=-crt-static" cargo install --locked --root "$SRCDIR/bindgen" bindgen-cli
 	export PATH="$SRCDIR/bindgen/bin:$PATH"
 
-	for p in 0001-zainium-system-paths.patch 0002-zainium-module-dir.patch; do
+	for p in 0001-zainium-system-paths.patch 0002-zainium-module-dir.patch 0003-ovl-sealed-mount.patch; do
 		patch -p1 < "$SRCDIR/$p"
 	done
 
@@ -80,17 +81,86 @@ _boot_test() {
 	rm -rf "$t"
 	mkdir -p "$t"
 	cat > "$t/init.c" <<'EOF'
+#include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
+#include <string.h>
+#include <sys/mount.h>
 #include <sys/reboot.h>
+#include <sys/stat.h>
 #include <sys/utsname.h>
 #include <unistd.h>
+
+static void touch(const char *path)
+{
+	close(open(path, O_CREAT | O_WRONLY, 0644));
+}
+
+static int listed(const char *dir, const char *name)
+{
+	struct dirent *e;
+	DIR *d = opendir(dir);
+	int found = 0;
+
+	while (d && (e = readdir(d)))
+		found |= !strcmp(e->d_name, name);
+	if (d)
+		closedir(d);
+	return found;
+}
+
+/* a sealed overlay: read-only for good, and direct upper changes show at once */
+static int sealed_test(void)
+{
+	struct stat st;
+	DIR *d;
+
+	mkdir("/t", 0755);
+	if (mount("tmpfs", "/t", "tmpfs", 0, NULL))
+		return 1;
+	mkdir("/t/lower", 0755);
+	mkdir("/t/lower/dir", 0755);
+	mkdir("/t/upper", 0755);
+	mkdir("/t/work", 0755);
+	mkdir("/t/m", 0755);
+	touch("/t/lower/base");
+	if (mount("overlay", "/t/m", "overlay", MS_RDONLY,
+		  "lowerdir=/t/lower,upperdir=/t/upper,workdir=/t/work,sealed"))
+		return 2;
+	if (open("/t/m/x", O_CREAT | O_WRONLY, 0644) >= 0 || errno != EROFS)
+		return 3;
+	if (!mount(NULL, "/t/m", NULL, MS_REMOUNT, NULL) || errno != EROFS)
+		return 4;
+	if (!stat("/t/m/new", &st) || stat("/t/m/dir", &st) || !listed("/t/m", "base"))
+		return 5;
+	d = opendir("/t/m");
+	touch("/t/upper/new");
+	mkdir("/t/upper/dir", 0755);
+	touch("/t/upper/dir/file");
+	if (stat("/t/m/new", &st))
+		return 6;
+	if (stat("/t/m/dir/file", &st))
+		return 7;
+	if (!listed("/t/m", "new"))
+		return 8;
+	if (d)
+		closedir(d);
+	return 0;
+}
 
 int main(void)
 {
 	struct utsname u;
+	int r;
 
 	uname(&u);
 	printf("ZAINIUM_BOOT_OK %s\n", u.release);
+	r = sealed_test();
+	if (r)
+		printf("ZAINIUM_SEALED_FAIL %d errno %d\n", r, errno);
+	else
+		printf("ZAINIUM_SEALED_OK\n");
 	fflush(stdout);
 	sync();
 	reboot(RB_POWER_OFF);
@@ -110,6 +180,12 @@ EOF
 		return 1
 	fi
 	grep "ZAINIUM_BOOT_OK" "$t/boot.log"
+	if ! grep -q "ZAINIUM_SEALED_OK" "$t/boot.log"; then
+		grep "ZAINIUM_SEALED_FAIL" "$t/boot.log" >&2
+		echo "sealed overlay test failed" >&2
+		return 1
+	fi
+	echo "sealed overlay test passed"
 }
 
 # the kernel image only: `zex kernel` puts it on the ESP, where Limine boots it.

@@ -1,0 +1,208 @@
+From: Ali Zain <alizain@zainiumdynamics.tech>
+Subject: [PATCH] ovl: add a sealed mount option
+
+A system can keep its base read-only for every caller while a package
+manager installs into the overlay's upper layer.  With a plain read-only
+overlay the mount can be remounted read-write by any privileged process,
+and changes made directly to the upper layer can stay hidden behind
+negative dentries and cached merged directory listings.
+
+Add the "sealed" option.  A sealed overlay is mounted read-only and
+refuses to be remounted read-write, through the same path that already
+keeps an overlay without an upper layer read-only.  Its upper layer stays
+in the stack and may be changed by a trusted writer while it is mounted:
+negative dentries and directories without an upper alias are checked
+against the upper parent on lookup, and merged directory listings are
+not cached.
+
+Signed-off-by: Ali Zain <alizain@zainiumdynamics.tech>
+---
+diff --git a/Documentation/filesystems/overlayfs.rst b/Documentation/filesystems/overlayfs.rst
+index 16c35b4..e5e9ed8 100644
+--- a/Documentation/filesystems/overlayfs.rst
++++ b/Documentation/filesystems/overlayfs.rst
+@@ -876,6 +876,21 @@ not crashed and contents of upperdir are intact, the "volatile" directory
+ can be removed.
+ 
+ 
++Sealed mount
++------------
++
++This is enabled with the "sealed" mount option.  A sealed overlay is
++read-only for good: it is mounted read-only and cannot be remounted
++read-write, so nothing writes to its layers through the overlay.
++
++The upper layer is still part of the stack, and it may be changed directly
++by a trusted writer while the overlay is mounted, for example by a package
++manager installing into it.  To show such changes, a sealed overlay checks
++negative dentries and directories that have no upper alias against the
++upper layer on lookup, and does not cache merged directory listings.
++
++A sealed overlay that has an upper layer still needs a work directory.
++
+ User xattr
+ ----------
+ 
+diff --git a/fs/overlayfs/overlayfs.h b/fs/overlayfs/overlayfs.h
+index 7f35583..a0f4687 100644
+--- a/fs/overlayfs/overlayfs.h
++++ b/fs/overlayfs/overlayfs.h
+@@ -944,7 +944,7 @@ int ovl_fill_super(struct super_block *sb, struct fs_context *fc);
+ /* Will this overlay be forced to mount/remount ro? */
+ static inline bool ovl_force_readonly(struct ovl_fs *ofs)
+ {
+-	return (!ovl_upper_mnt(ofs) || !ofs->workdir);
++	return (!ovl_upper_mnt(ofs) || !ofs->workdir || ofs->config.sealed);
+ }
+ 
+ /* xattr.c */
+diff --git a/fs/overlayfs/ovl_entry.h b/fs/overlayfs/ovl_entry.h
+index 80cad4e..00dafed 100644
+--- a/fs/overlayfs/ovl_entry.h
++++ b/fs/overlayfs/ovl_entry.h
+@@ -19,6 +19,7 @@ struct ovl_config {
+ 	bool metacopy;
+ 	bool userxattr;
+ 	int fsync_mode;
++	bool sealed;
+ };
+ 
+ struct ovl_sb {
+diff --git a/fs/overlayfs/params.c b/fs/overlayfs/params.c
+index 5a15e54..6dc0aca 100644
+--- a/fs/overlayfs/params.c
++++ b/fs/overlayfs/params.c
+@@ -60,6 +60,7 @@ enum ovl_opt {
+ 	Opt_verity,
+ 	Opt_fsync,
+ 	Opt_volatile,
++	Opt_sealed,
+ 	Opt_override_creds,
+ };
+ 
+@@ -175,6 +176,7 @@ const struct fs_parameter_spec ovl_parameter_spec[] = {
+ 	fsparam_enum("verity",              Opt_verity, ovl_parameter_verity),
+ 	fsparam_enum("fsync",               Opt_fsync, ovl_parameter_fsync),
+ 	fsparam_flag("volatile",            Opt_volatile),
++	fsparam_flag("sealed",              Opt_sealed),
+ 	fsparam_flag_no("override_creds",   Opt_override_creds),
+ 	{}
+ };
+@@ -693,6 +695,9 @@ static int ovl_parse_param(struct fs_context *fc, struct fs_parameter *param)
+ 	case Opt_volatile:
+ 		config->fsync_mode = OVL_FSYNC_VOLATILE;
+ 		break;
++	case Opt_sealed:
++		config->sealed = true;
++		break;
+ 	case Opt_userxattr:
+ 		config->userxattr = true;
+ 		break;
+@@ -1100,6 +1105,8 @@ int ovl_show_options(struct seq_file *m, struct dentry *dentry)
+ 		seq_printf(m, ",fsync=%s", ovl_fsync_mode(&ofs->config));
+ 	if (ofs->config.userxattr)
+ 		seq_puts(m, ",userxattr");
++	if (ofs->config.sealed)
++		seq_puts(m, ",sealed");
+ 	if (ofs->config.verity_mode != ovl_verity_mode_def())
+ 		seq_printf(m, ",verity=%s",
+ 			   ovl_verity_mode(&ofs->config));
+diff --git a/fs/overlayfs/readdir.c b/fs/overlayfs/readdir.c
+index 7d6f7f6..a4a2f31 100644
+--- a/fs/overlayfs/readdir.c
++++ b/fs/overlayfs/readdir.c
+@@ -486,7 +486,8 @@ static struct ovl_dir_cache *ovl_cache_get(struct dentry *dentry)
+ 	struct inode *inode = d_inode(dentry);
+ 
+ 	cache = ovl_dir_cache(inode);
+-	if (cache && ovl_inode_version_get(inode) == cache->version) {
++	if (cache && ovl_inode_version_get(inode) == cache->version &&
++	    !OVL_FS(dentry->d_sb)->config.sealed) {
+ 		WARN_ON(!cache->refcount);
+ 		cache->refcount++;
+ 		return cache;
+diff --git a/fs/overlayfs/super.c b/fs/overlayfs/super.c
+index bd0a3f9..191d0e2 100644
+--- a/fs/overlayfs/super.c
++++ b/fs/overlayfs/super.c
+@@ -118,6 +118,37 @@ static int ovl_revalidate_real(struct dentry *d, unsigned int flags, bool weak)
+ 	return ret;
+ }
+ 
++/*
++ * A sealed mount never writes to its upper layer, but the upper layer may be
++ * changed directly by a trusted writer.  A negative dentry, or a directory
++ * without an upper alias, is stale once its name shows up in the upper parent.
++ */
++static int ovl_sealed_revalidate(struct dentry *dentry, unsigned int flags)
++{
++	struct dentry *parent, *upperdir, *this;
++	struct name_snapshot n;
++	int ret = 1;
++
++	if (flags & LOOKUP_RCU)
++		return -ECHILD;
++
++	parent = dget_parent(dentry);
++	upperdir = ovl_dentry_upper(parent);
++	if (upperdir) {
++		take_dentry_name_snapshot(&n, dentry);
++		this = lookup_noperm_positive_unlocked(&n.name, upperdir);
++		release_dentry_name_snapshot(&n);
++		if (!IS_ERR(this)) {
++			dput(this);
++			ret = 0;
++		} else if (PTR_ERR(this) != -ENOENT) {
++			ret = PTR_ERR(this);
++		}
++	}
++	dput(parent);
++	return ret;
++}
++
+ static int ovl_dentry_revalidate_common(struct dentry *dentry,
+ 					unsigned int flags, bool weak)
+ {
+@@ -129,6 +160,8 @@ static int ovl_dentry_revalidate_common(struct dentry *dentry,
+ 	int ret = 1;
+ 
+ 	if (!inode) {
++		if (OVL_FS(dentry->d_sb)->config.sealed)
++			return ovl_sealed_revalidate(dentry, flags);
+ 		/*
+ 		 * Lookup of negative dentries will call ovl_dentry_init_flags()
+ 		 * with NULL upperdentry and NULL oe, resulting in the
+@@ -143,6 +176,11 @@ static int ovl_dentry_revalidate_common(struct dentry *dentry,
+ 	oe = OVL_I_E(inode);
+ 	lowerstack = ovl_lowerstack(oe);
+ 	upper = ovl_i_dentry_upper(inode);
++	if (!upper && d_is_dir(dentry) && OVL_FS(dentry->d_sb)->config.sealed) {
++		ret = ovl_sealed_revalidate(dentry, flags);
++		if (ret <= 0)
++			return ret;
++	}
+ 	if (upper)
+ 		ret = ovl_revalidate_real(upper, flags, weak);
+ 
+@@ -1462,7 +1500,7 @@ static int ovl_fill_super_creds(struct fs_context *fc, struct super_block *sb)
+ 		return err;
+ 
+ 	/* If the upper fs is nonexistent, we mark overlayfs r/o too */
+-	if (!ovl_upper_mnt(ofs))
++	if (!ovl_upper_mnt(ofs) || ofs->config.sealed)
+ 		sb->s_flags |= SB_RDONLY;
+ 
+ 	if (ovl_has_fsid(ofs) && ovl_upper_mnt(ofs)) {
+diff --git a/fs/overlayfs/util.c b/fs/overlayfs/util.c
+index b41f478..37eb1ea 100644
+--- a/fs/overlayfs/util.c
++++ b/fs/overlayfs/util.c
+@@ -192,6 +192,8 @@ void ovl_dentry_init_flags(struct dentry *dentry, struct dentry *upperdentry,
+ 		flags |= upperdentry->d_flags;
+ 	for (i = 0; i < ovl_numlower(oe) && lowerstack[i].dentry; i++)
+ 		flags |= lowerstack[i].dentry->d_flags;
++	if (OVL_FS(dentry->d_sb)->config.sealed)
++		flags |= DCACHE_OP_REVALIDATE;
+ 
+ 	spin_lock(&dentry->d_lock);
+ 	dentry->d_flags &= ~mask;
