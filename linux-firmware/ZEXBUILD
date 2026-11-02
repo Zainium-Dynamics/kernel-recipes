@@ -1,0 +1,15 @@
+maintainer="Zainium Dynamics <alizain@zainiumdynamics.tech>"
+pkgname=linux-firmware
+pkgver=20261019
+pkgrel=0
+source="https://cdn.kernel.org/pub/linux/kernel/firmware/linux-firmware-$pkgver.tar.xz"
+makedepends="zstd parallel rdfind coreutils"
+
+package() {
+	# the kernel looks for firmware in /overlayer/syshub/drivers/hardware/firmwares
+	# (0001-zainium-system-paths.patch) and reads .zst files (FW_LOADER_COMPRESS_ZSTD)
+	local fw="$PAYLOAD_DIR/overlayer/syshub/drivers/hardware/firmwares"
+	./copy-firmware.sh -j"$(nproc)" --zstd "$fw"
+	# identical files become relative links
+	./dedup-firmware.sh "$fw"
+}
