@@ -1,0 +1,9 @@
+policy_name=zainium policy_version=0.1.0
+
+# Built into the kernel, so it is enforced from the first instruction and moves with the
+# kernel on an upgrade or a rollback. Anything not named here keeps working.
+DEFAULT action=ALLOW
+
+# No kernel is ever replaced at run time: the next one is booted through Limine
+op=KEXEC_IMAGE action=DENY
+op=KEXEC_INITRAMFS action=DENY
