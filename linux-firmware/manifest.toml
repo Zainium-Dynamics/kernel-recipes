@@ -1,7 +1,7 @@
 [package]
 name             = "linux-firmware"
 version          = "20261019"
-description      = "Firmware for network, graphics, sound and other devices, zstd-compressed"
+description      = "Firmware for desktop and laptop network, graphics, sound and other devices, zstd-compressed"
 license          = "custom: redistributable (see WHENCE)"
 maintainer       = "Zainium Dynamics <alizain@zainiumdynamics.tech>"
 homepage         = "https://gitlab.com/kernel-firmware/linux-firmware"
