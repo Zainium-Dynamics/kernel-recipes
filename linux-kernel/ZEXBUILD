@@ -15,7 +15,8 @@ source="https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-$pkgver.tar.xz
 0001-zainium-system-paths.patch
 0002-zainium-module-dir.patch
 0003-ovl-sealed-mount.patch
-zainium.config"
+zainium.config
+zainium-ipe.pol"
 
 # Vanilla Linux with Zainium's system paths (firmware, shebangs, init, modprobe, poweroff)
 # and the modules under /overlayer/syshub; the release name is given to make (kmake).
@@ -45,6 +46,8 @@ build() {
 	done
 
 	cp "$SRCDIR/zainium.config" .config
+	# IPE's boot policy is compiled in: no signing key, and it goes wherever this kernel goes
+	cp "$SRCDIR/zainium-ipe.pol" zainium-ipe.pol
 	# desktop speed on top of Zainium's config: transparent hugepages, zstd for zram, no
 	# scheduler stats (x86-64-v3 and -O3 are compiler flags below: vanilla has no options for them)
 	scripts/config -e GENERIC_CPU -e CC_OPTIMIZE_FOR_PERFORMANCE \
@@ -52,7 +55,8 @@ build() {
 		-d ZRAM_DEF_COMP_LZORLE -e ZRAM_DEF_COMP_ZSTD \
 		-d SCHEDSTATS -d LATENCYTOP \
 		-d DEBUG_INFO_COMPRESSED_NONE -e DEBUG_INFO_COMPRESSED_ZSTD \
-		-d X86_DECODER_SELFTEST
+		-d X86_DECODER_SELFTEST \
+		--set-str IPE_BOOT_POLICY zainium-ipe.pol
 	# X86_DECODER_SELFTEST builds arch/x86/tools/insn_sanity with the host compiler, which
 	# cannot take the kernel's uapi headers on the musl build host; it is a build-time test only
 	kmake olddefconfig
@@ -89,6 +93,7 @@ _boot_test() {
 #include <sys/mount.h>
 #include <sys/reboot.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <sys/utsname.h>
 #include <unistd.h>
 
@@ -149,6 +154,30 @@ static int sealed_test(void)
 	return 0;
 }
 
+/* IPE's built-in policy is the active one and refuses a kexec image */
+static int ipe_test(void)
+{
+	char buf[4] = "";
+	int fd;
+
+	mkdir("/sys", 0755);
+	if (mount("sysfs", "/sys", "sysfs", 0, NULL) ||
+	    mount("securityfs", "/sys/kernel/security", "securityfs", 0, NULL))
+		return 1;
+	fd = open("/sys/kernel/security/ipe/policies/zainium/active", O_RDONLY);
+	if (fd < 0 || read(fd, buf, 1) != 1 || buf[0] != '1')
+		return 2;
+	close(fd);
+	fd = open("/quantra-ramfs", O_RDONLY);
+	if (fd < 0)
+		return 3;
+	/* without IPE the kernel would turn this file down as not an image (ENOEXEC) */
+	if (!syscall(SYS_kexec_file_load, fd, -1, 0, NULL, 4UL) || errno != EACCES)
+		return 4;
+	close(fd);
+	return 0;
+}
+
 int main(void)
 {
 	struct utsname u;
@@ -161,6 +190,11 @@ int main(void)
 		printf("ZAINIUM_SEALED_FAIL %d errno %d\n", r, errno);
 	else
 		printf("ZAINIUM_SEALED_OK\n");
+	r = ipe_test();
+	if (r)
+		printf("ZAINIUM_IPE_FAIL %d errno %d\n", r, errno);
+	else
+		printf("ZAINIUM_IPE_OK\n");
 	fflush(stdout);
 	sync();
 	reboot(RB_POWER_OFF);
@@ -173,7 +207,7 @@ EOF
 
 	timeout 900 qemu-system-x86_64 -m 1024 -smp 2 -cpu max -nographic -no-reboot \
 		-kernel arch/x86/boot/bzImage -initrd "$t/initrd.gz" \
-		-append "console=ttyS0 panic=-1" > "$t/boot.log" 2>&1 || true
+		-append "console=ttyS0 panic=-1 lsm=lockdown,yama,integrity,apparmor,bpf,landlock,ipe" > "$t/boot.log" 2>&1 || true
 	if ! grep -q "ZAINIUM_BOOT_OK $_krel" "$t/boot.log"; then
 		tail -60 "$t/boot.log"
 		echo "boot test failed: no ZAINIUM_BOOT_OK $_krel" >&2
@@ -186,6 +220,12 @@ EOF
 		return 1
 	fi
 	echo "sealed overlay test passed"
+	if ! grep -q "ZAINIUM_IPE_OK" "$t/boot.log"; then
+		grep "ZAINIUM_IPE_FAIL" "$t/boot.log" >&2
+		echo "IPE boot policy test failed" >&2
+		return 1
+	fi
+	echo "IPE boot policy test passed"
 }
 
 # the kernel image only: `zex kernel` puts it on the ESP, where Limine boots it.
