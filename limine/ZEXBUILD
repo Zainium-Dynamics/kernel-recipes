@@ -1,19 +1,28 @@
 maintainer="Zainium Dynamics <alizain@zainiumdynamics.tech>"
 pkgname=limine
 pkgver=12.9.6
-pkgrel=0
+pkgrel=1
+subpackages="limine-boot"
 source="https://github.com/limine-bootloader/limine/releases/download/v$pkgver/limine-$pkgver.tar.gz"
 makedepends="nasm mtools clang lld llvm"
 
 build() {
-	# the limine tool finds its files in /overlayer/syshub/share/limine (LIMINE_DATADIR);
 	# the boot loader's own search paths are on the EFI partition and stay as upstream
 	./configure --prefix=/overlayer/syshub \
 		--enable-bios --enable-bios-cd \
 		--enable-uefi-x86-64 --enable-uefi-cd
 	make -j"$(nproc)"
+	make DESTDIR="$(pwd)/_inst" install-strip
 }
 
+# only the limine tool goes into the base
 package() {
-	make DESTDIR="$PAYLOAD_DIR" install-strip
+	mkdir -p "$PAYLOAD_DIR/bin"
+	cp _inst/overlayer/syshub/bin/limine "$PAYLOAD_DIR/bin/"
+}
+
+# everything else is for zaisys/limine; `zex kernel` puts it on the EFI partition
+boot() {
+	mkdir -p "$PAYLOAD_DIR/limine"
+	cp _inst/overlayer/syshub/share/limine/* "$PAYLOAD_DIR/limine/"
 }

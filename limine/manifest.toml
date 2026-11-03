@@ -1,7 +1,7 @@
 [package]
 name             = "limine"
 version          = "12.9.6"
-description      = "Limine boot loader: BIOS and UEFI x86-64 images and the limine install tool"
+description      = "The limine tool (bios-install, enroll-config); the boot files are in limine-boot"
 license          = "BSD-2-Clause"
 maintainer       = "Zainium Dynamics <alizain@zainiumdynamics.tech>"
 homepage         = "https://limine-bootloader.org"
@@ -18,7 +18,6 @@ tags             = ["base", "boot"]
 
 [install]
 bin     = "/overlayer/syshub/bin"
-share   = "/overlayer/syshub/share"
 _syshub = true
 
 [remove]

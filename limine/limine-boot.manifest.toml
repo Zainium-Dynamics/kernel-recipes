@@ -1,0 +1,28 @@
+[package]
+name             = "limine-boot"
+version          = "12.9.6"
+description      = "Limine's UEFI and BIOS boot files for the EFI partition, installed by zex kernel"
+license          = "BSD-2-Clause"
+maintainer       = "Zainium Dynamics <alizain@zainiumdynamics.tech>"
+homepage         = "https://limine-bootloader.org"
+build_type       = "dynamic"
+libc_target      = "musl"
+
+blake3           = ""
+ed25519_sig      = ""
+ed25519_pubkey   = ""
+
+depends          = []
+provides         = ["limine-boot"]
+tags             = ["base", "boot"]
+
+[install]
+limine  = "/overlayer/zaisys/limine"
+_kernel = true
+
+[remove]
+files    = []
+dirs     = []
+symlinks = []
+
+[hooks]
