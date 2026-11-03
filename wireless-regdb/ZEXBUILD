@@ -1,0 +1,16 @@
+maintainer="Zainium Dynamics <alizain@zainiumdynamics.tech>"
+pkgname=wireless-regdb
+pkgver=2026.09.03
+pkgrel=0
+source="https://mirrors.edge.kernel.org/pub/software/network/wireless-regdb/wireless-regdb-$pkgver.tar.xz"
+makedepends="zstd"
+
+# the WiFi regulatory database (allowed channels and power per country), signed;
+# the kernel loads it as firmware. Not part of linux-firmware.
+package() {
+	local fw="$PAYLOAD_DIR/overlayer/syshub/drivers/hardware/firmwares"
+	mkdir -p "$fw"
+	for f in regulatory.db regulatory.db.p7s; do
+		zstd -q -19 "$f" -o "$fw/$f.zst"
+	done
+}

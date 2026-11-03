@@ -1,0 +1,28 @@
+[package]
+name             = "wireless-regdb"
+version          = "2026.09.03"
+description      = "WiFi regulatory database (regulatory.db), loaded by the kernel"
+license          = "ISC"
+maintainer       = "Zainium Dynamics <alizain@zainiumdynamics.tech>"
+homepage         = "https://wireless.wiki.kernel.org/en/developers/regulatory/wireless-regdb"
+build_type       = "noarch"
+libc_target      = "musl"
+
+blake3           = ""
+ed25519_sig      = ""
+ed25519_pubkey   = ""
+
+depends          = []
+provides         = ["wireless-regdb"]
+tags             = ["base", "kernel", "firmware", "wifi"]
+
+[install]
+drivers = "/overlayer/syshub/drivers"
+_syshub = true
+
+[remove]
+files    = []
+dirs     = []
+symlinks = []
+
+[hooks]

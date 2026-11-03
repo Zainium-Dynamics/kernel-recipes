@@ -1,0 +1,28 @@
+[package]
+name             = "sof-firmware"
+version          = "2026.09.2"
+description      = "Sound Open Firmware: audio DSP firmware and topologies for Intel laptops"
+license          = "custom: BSD-3-Clause and redistributable (LICENCE.Intel)"
+maintainer       = "Zainium Dynamics <alizain@zainiumdynamics.tech>"
+homepage         = "https://github.com/thesofproject/sof-bin"
+build_type       = "noarch"
+libc_target      = "musl"
+
+blake3           = ""
+ed25519_sig      = ""
+ed25519_pubkey   = ""
+
+depends          = []
+provides         = ["sof-firmware"]
+tags             = ["base", "kernel", "firmware", "audio"]
+
+[install]
+drivers = "/overlayer/syshub/drivers"
+_syshub = true
+
+[remove]
+files    = []
+dirs     = []
+symlinks = []
+
+[hooks]

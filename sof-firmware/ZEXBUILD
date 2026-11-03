@@ -1,0 +1,28 @@
+maintainer="Zainium Dynamics <alizain@zainiumdynamics.tech>"
+pkgname=sof-firmware
+pkgver=2026.09.2
+pkgrel=0
+source="https://github.com/thesofproject/sof-bin/releases/download/v$pkgver/sof-bin-$pkgver.tar.gz"
+makedepends="zstd findutils"
+
+# Sound Open Firmware: the audio DSP firmware and topologies of most Intel laptops
+# since Ice Lake. Not part of linux-firmware.
+package() {
+	cd "$SRCDIR/sof-bin-$pkgver"
+	local fw="$PAYLOAD_DIR/overlayer/syshub/drivers/hardware/firmwares/intel"
+	mkdir -p "$fw"
+	for d in sof*; do
+		[ -d "$d" ] && cp -a "$d" "$fw/"
+	done
+	cd "$fw"
+	# zstd, like linux-firmware here; links to files follow the new names,
+	# links to directories (sof-ace-tplg -> sof-ipc4-tplg) stay
+	find sof* -type f -exec zstd -q -19 --rm {} +
+	find sof* -type l | while read -r l; do
+		t="$(readlink "$l")"
+		if [ -f "$(dirname "$l")/$t.zst" ]; then
+			ln -s "$t.zst" "$l.zst"
+			rm "$l"
+		fi
+	done
+}
