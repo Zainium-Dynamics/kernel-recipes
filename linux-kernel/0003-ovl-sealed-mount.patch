@@ -15,6 +15,11 @@ negative dentries and directories without an upper alias are checked
 against the upper parent on lookup, and merged directory listings are
 not cached.
 
+An inode that gains an upper alias this way is hashed by the upper inode:
+a lower-only directory stays in the inode cache while anything under it
+runs, and a lookup that found it by its lower inode would fail with ESTALE
+for as long as it is in use.
+
 Signed-off-by: Ali Zain <alizain@zainiumdynamics.tech>
 ---
 diff --git a/Documentation/filesystems/overlayfs.rst b/Documentation/filesystems/overlayfs.rst
@@ -43,6 +48,23 @@ index 16c35b4..e5e9ed8 100644
  User xattr
  ----------
  
+diff --git a/fs/overlayfs/inode.c b/fs/overlayfs/inode.c
+--- a/fs/overlayfs/inode.c
++++ b/fs/overlayfs/inode.c
+@@ -1176,6 +1176,13 @@ static bool ovl_hash_bylower(struct super_block *sb, struct dentry *upper,
+ 	if (!lower)
+ 		return false;
+ 
++	/*
++	 * No, if sealed: the upper may appear while the lower-only inode is
++	 * in use, and the two must not be taken for one inode
++	 */
++	if (ofs->config.sealed && upper)
++		return false;
++
+ 	/* Yes, if already indexed */
+ 	if (index)
+ 		return true;
 diff --git a/fs/overlayfs/overlayfs.h b/fs/overlayfs/overlayfs.h
 index 7f35583..a0f4687 100644
 --- a/fs/overlayfs/overlayfs.h
