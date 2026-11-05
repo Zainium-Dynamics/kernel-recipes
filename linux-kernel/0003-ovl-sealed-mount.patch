@@ -20,6 +20,9 @@ a lower-only directory stays in the inode cache while anything under it
 runs, and a lookup that found it by its lower inode would fail with ESTALE
 for as long as it is in use.
 
+An upper dentry that was unlinked or renamed over is unhashed, so a merged
+dentry that points to one is stale and is looked up again.
+
 Signed-off-by: Ali Zain <alizain@zainiumdynamics.tech>
 ---
 diff --git a/Documentation/filesystems/overlayfs.rst b/Documentation/filesystems/overlayfs.rst
@@ -41,7 +44,8 @@ index 16c35b4..e5e9ed8 100644
 +by a trusted writer while the overlay is mounted, for example by a package
 +manager installing into it.  To show such changes, a sealed overlay checks
 +negative dentries and directories that have no upper alias against the
-+upper layer on lookup, and does not cache merged directory listings.
++upper layer on lookup, drops dentries whose upper was removed or replaced,
++and does not cache merged directory listings.
 +
 +A sealed overlay that has an upper layer still needs a work directory.
 +
@@ -194,7 +198,7 @@ index bd0a3f9..191d0e2 100644
  		/*
  		 * Lookup of negative dentries will call ovl_dentry_init_flags()
  		 * with NULL upperdentry and NULL oe, resulting in the
-@@ -143,6 +176,11 @@ static int ovl_dentry_revalidate_common(struct dentry *dentry,
+@@ -143,6 +176,14 @@ static int ovl_dentry_revalidate_common(struct dentry *dentry,
  	oe = OVL_I_E(inode);
  	lowerstack = ovl_lowerstack(oe);
  	upper = ovl_i_dentry_upper(inode);
@@ -203,10 +207,13 @@ index bd0a3f9..191d0e2 100644
 +		if (ret <= 0)
 +			return ret;
 +	}
++	if (upper && !weak && d_unhashed(upper) &&
++	    OVL_FS(dentry->d_sb)->config.sealed)
++		return flags & LOOKUP_RCU ? -ECHILD : 0;
  	if (upper)
  		ret = ovl_revalidate_real(upper, flags, weak);
  
-@@ -1462,7 +1500,7 @@ static int ovl_fill_super_creds(struct fs_context *fc, struct super_block *sb)
+@@ -1462,7 +1503,7 @@ static int ovl_fill_super_creds(struct fs_context *fc, struct super_block *sb)
  		return err;
  
  	/* If the upper fs is nonexistent, we mark overlayfs r/o too */
