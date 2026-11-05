@@ -29,7 +29,7 @@ diff --git a/Documentation/filesystems/overlayfs.rst b/Documentation/filesystems
 index 16c35b4..e5e9ed8 100644
 --- a/Documentation/filesystems/overlayfs.rst
 +++ b/Documentation/filesystems/overlayfs.rst
-@@ -876,6 +876,21 @@ not crashed and contents of upperdir are intact, the "volatile" directory
+@@ -876,6 +876,22 @@ not crashed and contents of upperdir are intact, the "volatile" directory
  can be removed.
  
  
