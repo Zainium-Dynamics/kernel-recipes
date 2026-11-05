@@ -1,9 +1,16 @@
 Zainium OS kernel
 =================
 
-This repository builds the Linux kernel of Zainium OS from the vanilla
-sources on kernel.org, with Zainium's paths and configuration. The recipe
-in linux-kernel/ makes three packages from one tree:
+This repository holds what boots Zainium OS: the Linux kernel, the boot
+loader and the firmware.
+
+    linux-kernel/     Linux 7.3.1, from the vanilla sources on kernel.org
+    limine/           the limine tool, and limine-boot with its boot files
+    linux-firmware/   firmware for laptops and desktops
+    sof-firmware/     Intel laptop sound
+    wireless-regdb/   the WiFi regulatory database
+
+The recipe in linux-kernel/ makes three packages from one tree:
 
     linux-kernel           the kernel (linux-zainium) and its fallback copy
                            (linux-panic), installed on the EFI partition
@@ -21,10 +28,30 @@ What the recipe changes
                                       modprobe, reboot and depmod under
                                       /overlayer/syshub
     0002-zainium-module-dir.patch     modules in /overlayer/syshub/drivers/modules
+    0003-ovl-sealed-mount.patch       the "sealed" OverlayFS mount option
     zainium.config                    Zainium's kernel configuration (Rust, BTF)
+    zainium-ipe.pol                   the IPE policy built into the kernel
 
 The build adds x86-64-v3 (an AVX2 CPU is needed), -O3, transparent
 hugepages and zstd for zram.
+
+The sealed overlay
+------------------
+
+/overlayer/syshub is an overlay of the base with the installed software on
+top. A plain read-only overlay can be remounted writable by root, and its
+upper layer must not change while it is mounted. A sealed overlay is
+read-only for good, while zex installs straight into its upper layer: new,
+replaced and removed files show through at once, and programs already
+running keep working. See Documentation/filesystems/overlayfs.rst in the
+patch, and https://zainiumdynamics.tech/docs/kernel
+
+Signed modules
+--------------
+
+Modules are signed during the build and lockdown refuses any other, so a
+kernel only loads the modules of its own build. linux-kernel and
+linux-kernel-modules always go out and are installed as a pair.
 
 Building and testing
 --------------------
