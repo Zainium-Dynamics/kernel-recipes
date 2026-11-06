@@ -11,7 +11,7 @@ Add the "sealed" option.  A sealed overlay is mounted read-only and
 refuses to be remounted read-write, through the same path that already
 keeps an overlay without an upper layer read-only.  Its upper layer stays
 in the stack and may be changed by a trusted writer while it is mounted:
-negative dentries and directories without an upper alias are checked
+negative dentries and dentries without an upper alias are checked
 against the upper parent on lookup, and merged directory listings are
 not cached.
 
@@ -23,13 +23,18 @@ for as long as it is in use.
 An upper dentry that was unlinked or renamed over is unhashed, so a merged
 dentry that points to one is stale and is looked up again.
 
+The directories that hold programs and libraries are protected: there, an
+entry in the upper layer, a whiteout or an opaque directory never hides
+what the lower layer has, so nothing written to the upper layer can replace
+a program of the base.
+
 Signed-off-by: Ali Zain <alizain@zainiumdynamics.tech>
 ---
 diff --git a/Documentation/filesystems/overlayfs.rst b/Documentation/filesystems/overlayfs.rst
 index 16c35b4..e5e9ed8 100644
 --- a/Documentation/filesystems/overlayfs.rst
 +++ b/Documentation/filesystems/overlayfs.rst
-@@ -876,6 +876,22 @@ not crashed and contents of upperdir are intact, the "volatile" directory
+@@ -876,6 +876,26 @@ not crashed and contents of upperdir are intact, the "volatile" directory
  can be removed.
  
  
@@ -43,9 +48,13 @@ index 16c35b4..e5e9ed8 100644
 +The upper layer is still part of the stack, and it may be changed directly
 +by a trusted writer while the overlay is mounted, for example by a package
 +manager installing into it.  To show such changes, a sealed overlay checks
-+negative dentries and directories that have no upper alias against the
++negative dentries and dentries that have no upper alias against the
 +upper layer on lookup, drops dentries whose upper was removed or replaced,
 +and does not cache merged directory listings.
++
++In the top-level bin, sbin, libexec, lib, drivers and the musl directory the
++lower layer always wins: the upper layer can add files there but can not
++replace or hide a lower one.
 +
 +A sealed overlay that has an upper layer still needs a work directory.
 +
@@ -69,6 +78,89 @@ diff --git a/fs/overlayfs/inode.c b/fs/overlayfs/inode.c
  	/* Yes, if already indexed */
  	if (index)
  		return true;
+diff --git a/fs/overlayfs/namei.c b/fs/overlayfs/namei.c
+--- a/fs/overlayfs/namei.c
++++ b/fs/overlayfs/namei.c
+@@ -1087,6 +1087,52 @@ struct ovl_lookup_ctx {
+ 	unsigned int ctr;
+ };
+ 
++/* Top-level directories of a sealed overlay where the lower layer always wins */
++static const char * const ovl_sealed_protected[] = {
++	"bin", "sbin", "libexec", "lib", "drivers", "x86_64-zainium-linux-musl",
++};
++
++static bool ovl_sealed_is_protected(struct dentry *dentry)
++{
++	struct dentry *top = dentry;
++	unsigned int i;
++
++	while (!IS_ROOT(top->d_parent))
++		top = top->d_parent;
++
++	for (i = 0; i < ARRAY_SIZE(ovl_sealed_protected); i++) {
++		const char *name = ovl_sealed_protected[i];
++
++		if (top->d_name.len == strlen(name) &&
++		    !memcmp(top->d_name.name, name, top->d_name.len))
++			return true;
++	}
++	return false;
++}
++
++/* 0: nothing in the lower layers, 1: a directory, 2: anything else */
++static int ovl_sealed_lower_type(struct dentry *dentry, struct ovl_entry *poe)
++{
++	const struct qstr *name = &dentry->d_name;
++	unsigned int i;
++
++	for (i = 0; i < ovl_numlower(poe); i++) {
++		struct ovl_path *parentpath = &ovl_lowerstack(poe)[i];
++		struct dentry *this;
++		int type;
++
++		this = lookup_one_positive_unlocked(mnt_idmap(parentpath->layer->mnt),
++						    &QSTR_LEN(name->name, name->len),
++						    parentpath->dentry);
++		if (IS_ERR(this))
++			continue;
++		type = d_is_dir(this) ? 1 : 2;
++		dput(this);
++		return type;
++	}
++	return 0;
++}
++
+ static int ovl_lookup_layers(struct ovl_lookup_ctx *ctx, struct ovl_lookup_data *d)
+ {
+ 	struct dentry *dentry = ctx->dentry;
+@@ -1110,6 +1156,26 @@ static int ovl_lookup_layers(struct ovl_lookup_ctx *ctx, struct ovl_lookup_data
+ 		if (err)
+ 			return err;
+ 
++		if (ofs->config.sealed && (ctx->upperdentry || d->opaque) &&
++		    ovl_sealed_is_protected(dentry)) {
++			int lower = ovl_sealed_lower_type(dentry, poe);
++
++			if (lower == 2 || (lower == 1 && !d->is_dir)) {
++				/* The upper hides a file of the base: ignore it */
++				dput(ctx->upperdentry);
++				ctx->upperdentry = NULL;
++				kfree(d->redirect);
++				d->redirect = NULL;
++				d->is_dir = false;
++				d->opaque = false;
++				d->stop = false;
++				d->metacopy = 0;
++			} else if (lower == 1) {
++				d->opaque = false;
++				d->stop = false;
++			}
++		}
++
+ 		if (ctx->upperdentry && ctx->upperdentry->d_flags & DCACHE_OP_REAL)
+ 			return -EREMOTE;
+ 
 diff --git a/fs/overlayfs/overlayfs.h b/fs/overlayfs/overlayfs.h
 index 7f35583..a0f4687 100644
 --- a/fs/overlayfs/overlayfs.h
@@ -157,7 +249,7 @@ index bd0a3f9..191d0e2 100644
  
 +/*
 + * A sealed mount never writes to its upper layer, but the upper layer may be
-+ * changed directly by a trusted writer.  A negative dentry, or a directory
++ * changed directly by a trusted writer.  A negative dentry, or a dentry
 + * without an upper alias, is stale once its name shows up in the upper parent.
 + */
 +static int ovl_sealed_revalidate(struct dentry *dentry, unsigned int flags)
@@ -202,7 +294,7 @@ index bd0a3f9..191d0e2 100644
  	oe = OVL_I_E(inode);
  	lowerstack = ovl_lowerstack(oe);
  	upper = ovl_i_dentry_upper(inode);
-+	if (!upper && d_is_dir(dentry) && OVL_FS(dentry->d_sb)->config.sealed) {
++	if (!upper && OVL_FS(dentry->d_sb)->config.sealed) {
 +		ret = ovl_sealed_revalidate(dentry, flags);
 +		if (ret <= 0)
 +			return ret;
