@@ -11,7 +11,7 @@ Add the "sealed" option.  A sealed overlay is mounted read-only and
 refuses to be remounted read-write, through the same path that already
 keeps an overlay without an upper layer read-only.  Its upper layer stays
 in the stack and may be changed by a trusted writer while it is mounted:
-negative dentries and directories without an upper alias are checked
+negative dentries and dentries without an upper alias are checked
 against the upper parent on lookup, and merged directory listings are
 not cached.
 
@@ -43,7 +43,7 @@ index 16c35b4..e5e9ed8 100644
 +The upper layer is still part of the stack, and it may be changed directly
 +by a trusted writer while the overlay is mounted, for example by a package
 +manager installing into it.  To show such changes, a sealed overlay checks
-+negative dentries and directories that have no upper alias against the
++negative dentries and dentries that have no upper alias against the
 +upper layer on lookup, drops dentries whose upper was removed or replaced,
 +and does not cache merged directory listings.
 +
@@ -157,7 +157,7 @@ index bd0a3f9..191d0e2 100644
  
 +/*
 + * A sealed mount never writes to its upper layer, but the upper layer may be
-+ * changed directly by a trusted writer.  A negative dentry, or a directory
++ * changed directly by a trusted writer.  A negative dentry, or a dentry
 + * without an upper alias, is stale once its name shows up in the upper parent.
 + */
 +static int ovl_sealed_revalidate(struct dentry *dentry, unsigned int flags)
@@ -202,7 +202,7 @@ index bd0a3f9..191d0e2 100644
  	oe = OVL_I_E(inode);
  	lowerstack = ovl_lowerstack(oe);
  	upper = ovl_i_dentry_upper(inode);
-+	if (!upper && d_is_dir(dentry) && OVL_FS(dentry->d_sb)->config.sealed) {
++	if (!upper && OVL_FS(dentry->d_sb)->config.sealed) {
 +		ret = ovl_sealed_revalidate(dentry, flags);
 +		if (ret <= 0)
 +			return ret;
