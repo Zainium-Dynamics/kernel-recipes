@@ -1,7 +1,7 @@
 maintainer="Zainium Dynamics <alizain@zainiumdynamics.tech>"
 pkgname=linux-kernel
 pkgver=7.3.3
-pkgrel=0
+pkgrel=1
 # the one place the kernel's name is set: the image is kernel/$_kernel and the release
 # $_kernel-<major>.<minor>, so the module dir and boot paths stay the same across point releases
 _kernel=linux-zainium
@@ -15,7 +15,22 @@ source="https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-$pkgver.tar.xz
 0001-zainium-system-paths.patch
 0002-zainium-module-dir.patch
 0003-ovl-sealed-mount.patch
+surface-0002-surface3.patch
+surface-0003-mwifiex.patch
+surface-0004-ath10k.patch
+surface-0005-ipts.patch
+surface-0006-ithc.patch
+surface-0007-surface-sam.patch
+surface-0008-surface-sam-over-hid.patch
+surface-0009-surface-button.patch
+surface-0010-surface-typecover.patch
+surface-0011-surface-shutdown.patch
+surface-0012-surface-gpe.patch
+surface-0013-cameras.patch
+surface-0014-amd-gpio.patch
+surface-0015-hid-surface.patch
 zainium.config
+surface.config
 zainium-ipe.pol"
 
 # Vanilla Linux with Zainium's system paths (firmware, shebangs, init, modprobe, poweroff)
@@ -44,8 +59,15 @@ build() {
 	for p in 0001-zainium-system-paths.patch 0002-zainium-module-dir.patch 0003-ovl-sealed-mount.patch; do
 		patch -p1 < "$SRCDIR/$p"
 	done
+	# Microsoft Surface support from linux-surface (patches/7.3 and configs/surface-7.3.config,
+	# github.com/linux-surface/linux-surface), without 0001-secureboot: it reverts the PE
+	# header's NX flag and adds a lockdown bypass for hibernation
+	for p in "$SRCDIR"/surface-0*.patch; do
+		patch -p1 < "$p"
+	done
 
 	cp "$SRCDIR/zainium.config" .config
+	cat "$SRCDIR/surface.config" >> .config
 	# IPE's boot policy is compiled in: no signing key, and it goes wherever this kernel goes
 	cp "$SRCDIR/zainium-ipe.pol" zainium-ipe.pol
 	# desktop speed on top of Zainium's config: transparent hugepages, zstd for zram, no
