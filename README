@@ -32,8 +32,8 @@ What the recipe changes
     zainium.config                    Zainium's kernel configuration (Rust, BTF)
     zainium-ipe.pol                   the IPE policy built into the kernel
 
-The build adds x86-64-v3 (an AVX2 CPU is needed), -O3, transparent
-hugepages and zstd for zram.
+The kernel is built for generic x86-64, so it runs on any 64-bit CPU.
+The build adds -O3, transparent hugepages and zstd for zram.
 
 The sealed overlay
 ------------------

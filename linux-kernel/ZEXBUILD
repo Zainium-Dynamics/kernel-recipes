@@ -1,7 +1,7 @@
 maintainer="Zainium Dynamics <alizain@zainiumdynamics.tech>"
 pkgname=linux-kernel
 pkgver=7.3.3
-pkgrel=1
+pkgrel=2
 # the one place the kernel's name is set: the image is kernel/$_kernel and the release
 # $_kernel-<major>.<minor>, so the module dir and boot paths stay the same across point releases
 _kernel=linux-zainium
@@ -71,7 +71,7 @@ build() {
 	# IPE's boot policy is compiled in: no signing key, and it goes wherever this kernel goes
 	cp "$SRCDIR/zainium-ipe.pol" zainium-ipe.pol
 	# desktop speed on top of Zainium's config: transparent hugepages, zstd for zram, no
-	# scheduler stats (x86-64-v3 and -O3 are compiler flags below: vanilla has no options for them)
+	# scheduler stats (-O3 is a compiler flag below: vanilla has no option for it)
 	scripts/config -e GENERIC_CPU -e CC_OPTIMIZE_FOR_PERFORMANCE \
 		-e TRANSPARENT_HUGEPAGE -e TRANSPARENT_HUGEPAGE_ALWAYS \
 		-d ZRAM_DEF_COMP_LZORLE -e ZRAM_DEF_COMP_ZSTD \
@@ -95,12 +95,12 @@ build() {
 	done
 	[ "$(kmake -s kernelrelease)" = "$_krel" ] || { echo "kernelrelease is not $_krel" >&2; return 1; }
 
-	# x86-64-v3 (AVX2, Haswell and newer) and -O3 for the C and the Rust code
-	kmake -j"$(nproc)" KCFLAGS="-march=x86-64-v3 -O3" KRUSTFLAGS="-Ctarget-cpu=x86-64-v3" bzImage modules
+	# generic x86-64, so it runs on any 64-bit CPU like the rest of the base, and -O3
+	kmake -j"$(nproc)" KCFLAGS="-O3" bzImage modules
 	_boot_test
 }
 
-# The kernel has to boot on an x86-64-v3 CPU and start the initramfs init from
+# The kernel has to boot on a plain x86-64 CPU with no AVX and start the initramfs init from
 # Zainium's path (/quantra-ramfs) on its own; the test init prints a marker and powers off.
 _boot_test() {
 	t="$SRCDIR/boot-test"
@@ -227,7 +227,7 @@ EOF
 	printf 'dir /dev 0755 0 0\nnod /dev/console 0600 0 0 c 5 1\nfile /quantra-ramfs %s 0755 0 0\n' "$t/init" > "$t/list"
 	usr/gen_init_cpio "$t/list" | gzip -9 > "$t/initrd.gz"
 
-	timeout 900 qemu-system-x86_64 -m 1024 -smp 2 -cpu max -nographic -no-reboot \
+	timeout 900 qemu-system-x86_64 -m 1024 -smp 2 -cpu qemu64 -nographic -no-reboot \
 		-kernel arch/x86/boot/bzImage -initrd "$t/initrd.gz" \
 		-append "console=ttyS0 panic=-1 lsm=lockdown,yama,integrity,apparmor,bpf,landlock,ipe" > "$t/boot.log" 2>&1 || true
 	if ! grep -q "ZAINIUM_BOOT_OK $_krel" "$t/boot.log"; then
