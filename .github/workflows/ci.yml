@@ -15,19 +15,19 @@ on:
     branches: [master]
   push:
     branches: [master]
-  # kernel-bump.yml starts this after it bumps the recipe on master
+  # kernel-bump.yml starts this on the branch of the pull request it opens
   workflow_dispatch:
 
 jobs:
   # PR validation: a stale run is worthless once new commits land on the
   # same PR, so cancel it outright and start the fresh one immediately.
   check:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/master')
     runs-on: ubuntu-latest
     # Google mirror of the Docker Hub image: anonymous pulls from shared runners hit the Docker Hub and ECR limits
     container: mirror.gcr.io/library/alpine:latest
     concurrency:
-      group: check-${{ github.event.pull_request.number }}
+      group: check-${{ github.event.pull_request.number || github.ref }}
       cancel-in-progress: true
     steps:
       - name: Container prerequisites (glibc shim for actions' Node runtime)
@@ -98,7 +98,7 @@ jobs:
           # ref for the base branch on a PR checkout, only the
           # origin/<branch> remote-tracking ref, so a bare branch name
           # here fails `git rev-parse` ("Needed a single revision").
-          BASE_SHA: origin/${{ github.event.pull_request.base.ref }}
+          BASE_SHA: origin/${{ github.event.pull_request.base.ref || 'master' }}
         run: |
           pkgs_out="$(mktemp)"
           if ! sh ci/changed-packages.sh > "$pkgs_out"; then

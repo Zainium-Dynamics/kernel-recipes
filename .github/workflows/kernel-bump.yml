@@ -1,18 +1,19 @@
 name: kernel bump
 
-# Every Thursday at 10:00 Pakistan time (05:00 UTC), or by hand: when kernel.org
-# has a newer Linux and Zainium's patches still apply to it, the kernel recipe is
-# bumped on master and the CI workflow is started to build, boot-test and
-# publish it. A push made with the workflow's own token starts no workflow by
-# itself, so CI is started explicitly.
+# Every Monday at 10:00 Pakistan time (05:00 UTC), or by hand: when kernel.org has
+# a newer Linux or linux-surface changed its patches, and every patch applies, the
+# kernel recipe is updated on a branch, a pull request is opened and CI builds and
+# boot-tests it there. Merging the pull request publishes it. A push made with the
+# workflow's own token starts no workflow by itself, so CI is started explicitly.
 on:
   schedule:
-    - cron: "0 5 * * 4"
+    - cron: "0 5 * * 1"
   workflow_dispatch:
 
 permissions:
   contents: write
   actions: write
+  pull-requests: write
 
 concurrency:
   group: kernel-bump
@@ -23,22 +24,26 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: master
 
-      - name: Look for a newer Linux and check the patches
+      - name: Look for a newer Linux and linux-surface patches, check them all
         id: bump
         run: sh ci/kernel-bump.sh
 
-      - name: Commit to master and start CI
+      - name: Open a pull request and start CI on it
         if: steps.bump.outputs.version != ''
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.bump.outputs.version }}
           PACKAGE: ${{ steps.bump.outputs.package }}
         run: |
+          branch="kernel-$VERSION"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -am "$PACKAGE: bump to $VERSION"
-          git push origin HEAD:master
-          gh workflow run ci.yml --ref master
+          git checkout -b "$branch"
+          git add -A
+          git commit -m "$PACKAGE: $VERSION"
+          git push -f origin "$branch"
+          gh workflow run ci.yml --ref "$branch"
+          gh pr view "$branch" >/dev/null 2>&1 || gh pr create --base master --head "$branch" \
+            --title "$PACKAGE: $VERSION" \
+            --body "Linux and the linux-surface patches, checked to apply. Merging publishes it."
