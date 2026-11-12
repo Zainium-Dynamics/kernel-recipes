@@ -43,7 +43,7 @@ jobs:
           git add -A
           git commit -m "$PACKAGE: $VERSION"
           git push -f origin "$branch"
+          gh workflow run ci.yml --ref "$branch"
           gh pr view "$branch" >/dev/null 2>&1 || gh pr create --base master --head "$branch" \
             --title "$PACKAGE: $VERSION" \
             --body "Linux and the linux-surface patches, checked to apply. Merging publishes it."
-          gh workflow run ci.yml --ref "$branch"
