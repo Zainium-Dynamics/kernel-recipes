@@ -1,7 +1,7 @@
 maintainer="Zainium Dynamics <alizain@zainiumdynamics.tech>"
 pkgname=linux-kernel
 pkgver=7.3.3
-pkgrel=2
+pkgrel=3
 # the one place the kernel's name is set: the image is kernel/$_kernel and the release
 # $_kernel-<major>.<minor>, so the module dir and boot paths stay the same across point releases
 _kernel=linux-zainium
@@ -84,8 +84,10 @@ build() {
 	kmake olddefconfig
 	kmake rustavailable
 	# olddefconfig silently drops what the toolchain cannot do (Rust without rustc/bindgen)
+	# DM_CRYPT built in: quantra-ramfs opens an encrypted root before any module can load
 	for opt in CONFIG_RUST=y CONFIG_DEBUG_INFO_BTF=y \
-		CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y CONFIG_TRANSPARENT_HUGEPAGE=y; do
+		CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y CONFIG_TRANSPARENT_HUGEPAGE=y \
+		CONFIG_DM_CRYPT=y CONFIG_CRYPTO_XTS=y CONFIG_CRYPTO_AES=y; do
 		grep -qx "$opt" .config || { echo "olddefconfig dropped $opt" >&2; return 1; }
 	done
 	# the live image is zstd EROFS mounted from the initramfs: every built-in EROFS
