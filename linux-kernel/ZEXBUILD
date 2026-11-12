@@ -1,7 +1,7 @@
 maintainer="Zainium Dynamics <alizain@zainiumdynamics.tech>"
 pkgname=linux-kernel
-pkgver=7.3.3
-pkgrel=3
+pkgver=7.3.4
+pkgrel=0
 # the one place the kernel's name is set: the image is kernel/$_kernel and the release
 # $_kernel-<major>.<minor>, so the module dir and boot paths stay the same across point releases
 _kernel=linux-zainium

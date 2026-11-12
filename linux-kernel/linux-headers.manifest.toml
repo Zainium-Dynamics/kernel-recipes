@@ -3,7 +3,7 @@
 
 [package]
 name             = "linux-headers"
-version          = "7.3.3"
+version          = "7.3.4"
 description      = "Linux kernel headers (userspace API)"
 license          = "GPL-2.0-only WITH Linux-syscall-note"
 maintainer       = "Zainium Dynamics <alizain@zainiumdynamics.tech>"
