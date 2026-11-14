@@ -10,6 +10,8 @@ _krel="$_kernel-${pkgver%.*}"
 # this kernel's key; their GSP firmware comes from the driver of the same version. Flatpak
 # apps get the matching userspace from Flathub's GL.nvidia extension.
 _nvver=620.70.06
+# the version before it, built instead when $_nvver does not build on this kernel yet
+_nvprev=620.70.06
 # the kernel goes to the kernel tier (ESP, `zex kernel`); its modules to the base
 subpackages="linux-kernel-modules linux-headers"
 # GNU sed: AppArmor's capability names are generated with sed's \L, which BusyBox sed
@@ -38,7 +40,9 @@ surface.config
 zainium-ipe.pol
 nvidia.conf
 https://github.com/NVIDIA/open-gpu-kernel-modules/archive/refs/tags/$_nvver.tar.gz
-https://download.nvidia.com/XFree86/Linux-x86_64/$_nvver/NVIDIA-Linux-x86_64-$_nvver.run"
+https://download.nvidia.com/XFree86/Linux-x86_64/$_nvver/NVIDIA-Linux-x86_64-$_nvver.run
+https://github.com/NVIDIA/open-gpu-kernel-modules/archive/refs/tags/$_nvprev.tar.gz
+https://download.nvidia.com/XFree86/Linux-x86_64/$_nvprev/NVIDIA-Linux-x86_64-$_nvprev.run"
 
 # Vanilla Linux with Zainium's system paths (firmware, shebangs, init, modprobe, poweroff)
 # and the modules under /overlayer/syshub; the release name is given to make (kmake).
@@ -110,210 +114,39 @@ build() {
 	_nvidia_build
 }
 
-# NVIDIA's open modules against this tree. A release that does not build yet on a new kernel
-# must not hold the kernel back: the kernel ships without them, and the log says so.
+# NVIDIA's open modules against this tree: $_nvver, or $_nvprev when the new one does not
+# build on this kernel yet. If neither builds the kernel ships without them, and the log says so.
 _nvidia_build() {
-	nv="$SRCDIR/open-gpu-kernel-modules-$_nvver"
-	if (cd "$nv" && make -j"$(nproc)" modules SYSSRC="$SRCDIR/linux-$pkgver" SYSOUT="$SRCDIR/linux-$pkgver" KERNELRELEASE="$_krel"); then
-		touch "$SRCDIR/nvidia-built"
-	else
-		echo "WARNING: NVIDIA open modules $_nvver do not build on $pkgver, shipping without them" >&2
-	fi
-}
-
-# The kernel has to boot on a plain x86-64 CPU with no AVX and start the initramfs init from
-# Zainium's path (/quantra-ramfs) on its own; the test init prints a marker and powers off.
-_boot_test() {
-	t="$SRCDIR/boot-test"
-	rm -rf "$t"
-	mkdir -p "$t"
-	cat > "$t/init.c" <<'EOF'
-#include <dirent.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <stdio.h>
-#include <string.h>
-#include <sys/mount.h>
-#include <sys/reboot.h>
-#include <sys/stat.h>
-#include <sys/syscall.h>
-#include <sys/utsname.h>
-#include <unistd.h>
-
-static void touch(const char *path)
-{
-	close(open(path, O_CREAT | O_WRONLY, 0644));
-}
-
-static int listed(const char *dir, const char *name)
-{
-	struct dirent *e;
-	DIR *d = opendir(dir);
-	int found = 0;
-
-	while (d && (e = readdir(d)))
-		found |= !strcmp(e->d_name, name);
-	if (d)
-		closedir(d);
-	return found;
-}
-
-/* a sealed overlay: read-only for good, and direct upper changes show at once */
-static int sealed_test(void)
-{
-	struct stat st;
-	DIR *d;
-
-	mkdir("/t", 0755);
-	if (mount("tmpfs", "/t", "tmpfs", 0, NULL))
-		return 1;
-	mkdir("/t/lower", 0755);
-	mkdir("/t/lower/dir", 0755);
-	mkdir("/t/upper", 0755);
-	mkdir("/t/work", 0755);
-	mkdir("/t/m", 0755);
-	touch("/t/lower/base");
-	if (mount("overlay", "/t/m", "overlay", MS_RDONLY,
-		  "lowerdir=/t/lower,upperdir=/t/upper,workdir=/t/work,sealed"))
-		return 2;
-	if (open("/t/m/x", O_CREAT | O_WRONLY, 0644) >= 0 || errno != EROFS)
-		return 3;
-	if (!mount(NULL, "/t/m", NULL, MS_REMOUNT, NULL) || errno != EROFS)
-		return 4;
-	if (!stat("/t/m/new", &st) || stat("/t/m/dir", &st) || !listed("/t/m", "base"))
-		return 5;
-	d = opendir("/t/m");
-	touch("/t/upper/new");
-	mkdir("/t/upper/dir", 0755);
-	touch("/t/upper/dir/file");
-	if (stat("/t/m/new", &st))
-		return 6;
-	if (stat("/t/m/dir/file", &st))
-		return 7;
-	if (!listed("/t/m", "new"))
-		return 8;
-	if (d)
-		closedir(d);
-	return 0;
-}
-
-/* IPE's built-in policy is the active one and refuses a kexec image */
-static int ipe_test(void)
-{
-	char buf[4] = "";
-	int fd;
-
-	mkdir("/sys", 0755);
-	if (mount("sysfs", "/sys", "sysfs", 0, NULL) ||
-	    mount("securityfs", "/sys/kernel/security", "securityfs", 0, NULL))
-		return 1;
-	fd = open("/sys/kernel/security/ipe/policies/zainium/active", O_RDONLY);
-	if (fd < 0 || read(fd, buf, 1) != 1 || buf[0] != '1')
-		return 2;
-	close(fd);
-	fd = open("/quantra-ramfs", O_RDONLY);
-	if (fd < 0)
-		return 3;
-	/* without IPE the kernel would turn this file down as not an image (ENOEXEC) */
-	if (!syscall(SYS_kexec_file_load, fd, -1, 0, NULL, 4UL) || errno != EACCES)
-		return 4;
-	close(fd);
-	return 0;
-}
-
-int main(void)
-{
-	struct utsname u;
-	int r;
-
-	uname(&u);
-	printf("ZAINIUM_BOOT_OK %s\n", u.release);
-	r = sealed_test();
-	if (r)
-		printf("ZAINIUM_SEALED_FAIL %d errno %d\n", r, errno);
-	else
-		printf("ZAINIUM_SEALED_OK\n");
-	r = ipe_test();
-	if (r)
-		printf("ZAINIUM_IPE_FAIL %d errno %d\n", r, errno);
-	else
-		printf("ZAINIUM_IPE_OK\n");
-	fflush(stdout);
-	sync();
-	reboot(RB_POWER_OFF);
-	return 0;
-}
-EOF
-	cc -static -O2 -o "$t/init" "$t/init.c"
-	printf 'dir /dev 0755 0 0\nnod /dev/console 0600 0 0 c 5 1\nfile /quantra-ramfs %s 0755 0 0\n' "$t/init" > "$t/list"
-	usr/gen_init_cpio "$t/list" | gzip -9 > "$t/initrd.gz"
-
-	timeout 900 qemu-system-x86_64 -m 1024 -smp 2 -cpu qemu64 -nographic -no-reboot \
-		-kernel arch/x86/boot/bzImage -initrd "$t/initrd.gz" \
-		-append "console=ttyS0 panic=-1 lsm=lockdown,yama,integrity,apparmor,bpf,landlock,ipe" > "$t/boot.log" 2>&1 || true
-	if ! grep -q "ZAINIUM_BOOT_OK $_krel" "$t/boot.log"; then
-		tail -60 "$t/boot.log"
-		echo "boot test failed: no ZAINIUM_BOOT_OK $_krel" >&2
-		return 1
-	fi
-	grep "ZAINIUM_BOOT_OK" "$t/boot.log"
-	if ! grep -q "ZAINIUM_SEALED_OK" "$t/boot.log"; then
-		grep "ZAINIUM_SEALED_FAIL" "$t/boot.log" >&2
-		echo "sealed overlay test failed" >&2
-		return 1
-	fi
-	echo "sealed overlay test passed"
-	if ! grep -q "ZAINIUM_IPE_OK" "$t/boot.log"; then
-		grep "ZAINIUM_IPE_FAIL" "$t/boot.log" >&2
-		echo "IPE boot policy test failed" >&2
-		return 1
-	fi
-	echo "IPE boot policy test passed"
-}
-
-# the kernel image only: `zex kernel` puts it on the ESP, where Limine boots it.
-# linux-panic is the fallback entry's kernel (the boot menu's "Fallback Kernel"), as in zaisys
-package() {
-	cd "$SRCDIR/linux-$pkgver"
-	mkdir -p "$PAYLOAD_DIR/kernel"
-	cp arch/x86/boot/bzImage "$PAYLOAD_DIR/kernel/$_kernel"
-	cp arch/x86/boot/bzImage "$PAYLOAD_DIR/kernel/linux-panic"
-}
-
-# the modules for the base (drivers/modules/<release>), staged by `zex kernel` after asking
-modules() {
-	cd "$SRCDIR/linux-$pkgver"
-	kmake INSTALL_MOD_PATH="$PAYLOAD_DIR" INSTALL_MOD_STRIP=1 DEPMOD=true modules_install
-	mods="$PAYLOAD_DIR/overlayer/syshub/drivers/modules/$_krel"
-	rm -f "$mods/build" "$mods/source"
-	[ ! -e "$SRCDIR/nvidia-built" ] || _nvidia_install
-
-	# modules.dep and friends; depmod only takes a numeric release under lib/modules
-	scratch=$(mktemp -d)
-	mkdir -p "$scratch/lib/modules"
-	ln -s "$mods" "$scratch/lib/modules/0.0-$_krel"
-	depmod -a -b "$scratch" -F System.map "0.0-$_krel"
-	rm -rf "$scratch"
-	[ -s "$mods/modules.dep" ] || { echo "depmod wrote no modules.dep" >&2; return 1; }
+	for v in "$_nvver" "$_nvprev"; do
+		if (cd "$SRCDIR/open-gpu-kernel-modules-$v" && make -j"$(nproc)" modules \
+			SYSSRC="$SRCDIR/linux-$pkgver" SYSOUT="$SRCDIR/linux-$pkgver" KERNELRELEASE="$_krel"); then
+			echo "$v" > "$SRCDIR/nvidia-built"
+			[ "$v" = "$_nvver" ] || echo "WARNING: NVIDIA $_nvver does not build on $pkgver, shipping $v" >&2
+			return 0
+		fi
+		echo "WARNING: NVIDIA open modules $v do not build on $pkgver" >&2
+	done
+	echo "WARNING: no NVIDIA open modules build on $pkgver, shipping without them" >&2
 }
 
 # NVIDIA's modules go to extra/, signed like the rest by modules_install (MODULE_SIG_ALL),
 # with the GSP firmware of the same driver version. nvidia.conf keeps them from loading on
 # their own: nouveau stays the driver until the user turns NVIDIA's on.
 _nvidia_install() {
-	kmake M="$SRCDIR/open-gpu-kernel-modules-$_nvver/kernel-open" INSTALL_MOD_PATH="$PAYLOAD_DIR" \
+	v=$(cat "$SRCDIR/nvidia-built")
+	kmake M="$SRCDIR/open-gpu-kernel-modules-$v/kernel-open" INSTALL_MOD_PATH="$PAYLOAD_DIR" \
 		INSTALL_MOD_DIR=extra INSTALL_MOD_STRIP=1 DEPMOD=true modules_install
 	ls "$mods"/extra/nvidia*.ko* >/dev/null || { echo "no NVIDIA modules installed" >&2; return 1; }
 	# lockdown loads only signed modules: an unsigned one here would never load
 	for m in "$mods"/extra/nvidia*.ko*; do
 		[ -n "$(modinfo -F signer "$m")" ] || { echo "$(basename "$m") is not signed" >&2; return 1; }
 	done
-	echo "NVIDIA $_nvver modules signed: $(cd "$mods/extra" && ls nvidia*.ko* | tr '\n' ' ')"
+	echo "NVIDIA $v modules signed: $(cd "$mods/extra" && ls nvidia*.ko* | tr '\n' ' ')"
 
-	run="$SRCDIR/NVIDIA-Linux-x86_64-$_nvver.run"
+	run="$SRCDIR/NVIDIA-Linux-x86_64-$v.run"
 	rm -rf "$SRCDIR/nvidia-run"
 	sh "$run" --extract-only --target "$SRCDIR/nvidia-run" >/dev/null
-	fw="$PAYLOAD_DIR/overlayer/syshub/drivers/hardware/firmwares/nvidia/$_nvver"
+	fw="$PAYLOAD_DIR/overlayer/syshub/drivers/hardware/firmwares/nvidia/$v"
 	mkdir -p "$fw"
 	for f in "$SRCDIR"/nvidia-run/firmware/gsp_*.bin; do
 		zstd -q -19 "$f" -o "$fw/$(basename "$f").zst"

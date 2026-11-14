@@ -74,7 +74,8 @@ if [ -n "$nvcur" ]; then
     elif newer "$nvcur" "$nvflat"; then
         if curl -fsIL -o /dev/null "https://github.com/NVIDIA/open-gpu-kernel-modules/archive/refs/tags/$nvflat.tar.gz" &&
             curl -fsI -o /dev/null "https://download.nvidia.com/XFree86/Linux-x86_64/$nvflat/NVIDIA-Linux-x86_64-$nvflat.run"; then
-            sed -i "s/^_nvver=.*/_nvver=$nvflat/" "$recipe/ZEXBUILD"
+            # the version that built so far stays as the fallback
+            sed -i "s/^_nvprev=.*/_nvprev=$nvcur/; s/^_nvver=.*/_nvver=$nvflat/" "$recipe/ZEXBUILD"
             echo "$recipe: NVIDIA $nvflat is on Flathub (the recipe has $nvcur)"
         else
             echo "$recipe: NVIDIA $nvflat is on Flathub but its modules or driver are not published yet, keeping $nvcur"
