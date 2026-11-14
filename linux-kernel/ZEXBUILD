@@ -304,6 +304,11 @@ _nvidia_install() {
 	kmake M="$SRCDIR/open-gpu-kernel-modules-$_nvver/kernel-open" INSTALL_MOD_PATH="$PAYLOAD_DIR" \
 		INSTALL_MOD_DIR=extra INSTALL_MOD_STRIP=1 DEPMOD=true modules_install
 	ls "$mods"/extra/nvidia*.ko* >/dev/null || { echo "no NVIDIA modules installed" >&2; return 1; }
+	# lockdown loads only signed modules: an unsigned one here would never load
+	for m in "$mods"/extra/nvidia*.ko*; do
+		[ -n "$(modinfo -F signer "$m")" ] || { echo "$(basename "$m") is not signed" >&2; return 1; }
+	done
+	echo "NVIDIA $_nvver modules signed: $(cd "$mods/extra" && ls nvidia*.ko* | tr '\n' ' ')"
 
 	run="$SRCDIR/NVIDIA-Linux-x86_64-$_nvver.run"
 	rm -rf "$SRCDIR/nvidia-run"
