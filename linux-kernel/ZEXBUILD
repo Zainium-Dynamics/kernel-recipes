@@ -119,7 +119,7 @@ build() {
 _nvidia_build() {
 	for v in "$_nvver" "$_nvprev"; do
 		if (cd "$SRCDIR/open-gpu-kernel-modules-$v" && make -j"$(nproc)" modules \
-			SYSSRC="$SRCDIR/linux-$pkgver" SYSOUT="$SRCDIR/linux-$pkgver" KERNELRELEASE="$_krel"); then
+			SYSSRC="$SRCDIR/linux-$pkgver" SYSOUT="$SRCDIR/linux-$pkgver" KERNEL_UNAME="$_krel"); then
 			echo "$v" > "$SRCDIR/nvidia-built"
 			[ "$v" = "$_nvver" ] || echo "WARNING: NVIDIA $_nvver does not build on $pkgver, shipping $v" >&2
 			return 0
