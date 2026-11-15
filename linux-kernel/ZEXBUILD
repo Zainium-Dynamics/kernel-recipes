@@ -1,11 +1,17 @@
 maintainer="Zainium Dynamics <alizain@zainiumdynamics.tech>"
 pkgname=linux-kernel
 pkgver=7.3.4
-pkgrel=0
+pkgrel=1
 # the one place the kernel's name is set: the image is kernel/$_kernel and the release
 # $_kernel-<major>.<minor>, so the module dir and boot paths stay the same across point releases
 _kernel=linux-zainium
 _krel="$_kernel-${pkgver%.*}"
+# NVIDIA's open kernel modules (RTX 20 series and newer), built here so they are signed with
+# this kernel's key; their GSP firmware comes from the driver of the same version. Flatpak
+# apps get the matching userspace from Flathub's GL.nvidia extension.
+_nvver=620.70.06
+# the version before it, built instead when $_nvver does not build on this kernel yet
+_nvprev=620.70.06
 # the kernel goes to the kernel tier (ESP, `zex kernel`); its modules to the base
 subpackages="linux-kernel-modules linux-headers"
 # GNU sed: AppArmor's capability names are generated with sed's \L, which BusyBox sed
@@ -31,7 +37,12 @@ surface-0014-amd-gpio.patch
 surface-0015-hid-surface.patch
 zainium.config
 surface.config
-zainium-ipe.pol"
+zainium-ipe.pol
+nvidia.conf
+https://github.com/NVIDIA/open-gpu-kernel-modules/archive/refs/tags/$_nvver.tar.gz
+https://download.nvidia.com/XFree86/Linux-x86_64/$_nvver/NVIDIA-Linux-x86_64-$_nvver.run
+https://github.com/NVIDIA/open-gpu-kernel-modules/archive/refs/tags/$_nvprev.tar.gz
+https://download.nvidia.com/XFree86/Linux-x86_64/$_nvprev/NVIDIA-Linux-x86_64-$_nvprev.run"
 
 # Vanilla Linux with Zainium's system paths (firmware, shebangs, init, modprobe, poweroff)
 # and the modules under /overlayer/syshub; the release name is given to make (kmake).
@@ -100,6 +111,22 @@ build() {
 	# generic x86-64, so it runs on any 64-bit CPU like the rest of the base, and -O3
 	kmake -j"$(nproc)" KCFLAGS="-O3" bzImage modules
 	_boot_test
+	_nvidia_build
+}
+
+# NVIDIA's open modules against this tree: $_nvver, or $_nvprev when the new one does not
+# build on this kernel yet. If neither builds the kernel ships without them, and the log says so.
+_nvidia_build() {
+	for v in "$_nvver" "$_nvprev"; do
+		if (cd "$SRCDIR/open-gpu-kernel-modules-$v" && make -j"$(nproc)" modules \
+			SYSSRC="$SRCDIR/linux-$pkgver" SYSOUT="$SRCDIR/linux-$pkgver" KERNEL_UNAME="$_krel"); then
+			echo "$v" > "$SRCDIR/nvidia-built"
+			[ "$v" = "$_nvver" ] || echo "WARNING: NVIDIA $_nvver does not build on $pkgver, shipping $v" >&2
+			return 0
+		fi
+		echo "WARNING: NVIDIA open modules $v do not build on $pkgver" >&2
+	done
+	echo "WARNING: no NVIDIA open modules build on $pkgver, shipping without them" >&2
 }
 
 # The kernel has to boot on a plain x86-64 CPU with no AVX and start the initramfs init from
@@ -267,6 +294,7 @@ modules() {
 	kmake INSTALL_MOD_PATH="$PAYLOAD_DIR" INSTALL_MOD_STRIP=1 DEPMOD=true modules_install
 	mods="$PAYLOAD_DIR/overlayer/syshub/drivers/modules/$_krel"
 	rm -f "$mods/build" "$mods/source"
+	[ ! -e "$SRCDIR/nvidia-built" ] || _nvidia_install
 
 	# modules.dep and friends; depmod only takes a numeric release under lib/modules
 	scratch=$(mktemp -d)
@@ -275,6 +303,33 @@ modules() {
 	depmod -a -b "$scratch" -F System.map "0.0-$_krel"
 	rm -rf "$scratch"
 	[ -s "$mods/modules.dep" ] || { echo "depmod wrote no modules.dep" >&2; return 1; }
+}
+
+# NVIDIA's modules go to extra/, signed like the rest by modules_install (MODULE_SIG_ALL),
+# with the GSP firmware of the same driver version. nvidia.conf keeps them from loading on
+# their own: nouveau stays the driver until the user turns NVIDIA's on.
+_nvidia_install() {
+	v=$(cat "$SRCDIR/nvidia-built")
+	kmake M="$SRCDIR/open-gpu-kernel-modules-$v/kernel-open" INSTALL_MOD_PATH="$PAYLOAD_DIR" \
+		INSTALL_MOD_DIR=extra INSTALL_MOD_STRIP=1 DEPMOD=true modules_install
+	ls "$mods"/extra/nvidia*.ko* >/dev/null || { echo "no NVIDIA modules installed" >&2; return 1; }
+	# lockdown loads only signed modules: an unsigned one here would never load
+	for m in "$mods"/extra/nvidia*.ko*; do
+		[ -n "$(modinfo -F signer "$m")" ] || { echo "$(basename "$m") is not signed" >&2; return 1; }
+	done
+	echo "NVIDIA $v modules signed: $(cd "$mods/extra" && ls nvidia*.ko* | tr '\n' ' ')"
+
+	run="$SRCDIR/NVIDIA-Linux-x86_64-$v.run"
+	rm -rf "$SRCDIR/nvidia-run"
+	sh "$run" --extract-only --target "$SRCDIR/nvidia-run" >/dev/null
+	fw="$PAYLOAD_DIR/overlayer/syshub/drivers/hardware/firmwares/nvidia/$v"
+	mkdir -p "$fw"
+	for f in "$SRCDIR"/nvidia-run/firmware/gsp_*.bin; do
+		zstd -q -19 "$f" -o "$fw/$(basename "$f").zst"
+	done
+	ls "$fw"/gsp_*.bin.zst >/dev/null || { echo "no GSP firmware in the NVIDIA driver" >&2; return 1; }
+
+	install -Dm644 "$SRCDIR/nvidia.conf" "$PAYLOAD_DIR/overlayer/syshub/lib/modprobe.d/nvidia.conf"
 }
 
 # the kernel's userspace API headers, from the same tree, for the userland

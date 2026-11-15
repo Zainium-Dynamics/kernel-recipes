@@ -21,6 +21,7 @@ tags             = ["base", "kernel", "modules"]
 
 [install]
 drivers = "/overlayer/syshub/drivers"
+lib     = "/overlayer/syshub/lib"
 _syshub = true
 
 [remove]

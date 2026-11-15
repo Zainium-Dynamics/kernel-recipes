@@ -61,15 +61,38 @@ LIST=$list awk '
     /^zainium\.config$/ && !done { n = split(ENVIRON["LIST"], l, "\n"); for (i = 1; i <= n; i++) print l[i]; done = 1 }
     { print }
 ' "$recipe/ZEXBUILD" > "$tmp/ZEXBUILD" && cat "$tmp/ZEXBUILD" > "$recipe/ZEXBUILD"
+
+# NVIDIA's open modules follow the newest production driver that Flathub has built its
+# GL.nvidia extension for, so Flatpak apps always find the userspace of the same version.
+# A newer one is taken only once NVIDIA has published both the modules and the driver.
+nvcur=$(sed -n 's/^_nvver=//p' "$recipe/ZEXBUILD")
+if [ -n "$nvcur" ]; then
+    nvflat=$(curl -fsSL https://raw.githubusercontent.com/flathub/org.freedesktop.Platform.GL.nvidia/master/versions.sh \
+        | sed -n 's/^PRODUCTION_VERSIONS="\([^ "]*\).*/\1/p')
+    if [ -z "$nvflat" ]; then
+        echo "$recipe: could not read Flathub's NVIDIA versions, keeping $nvcur"
+    elif newer "$nvcur" "$nvflat"; then
+        if curl -fsIL -o /dev/null "https://github.com/NVIDIA/open-gpu-kernel-modules/archive/refs/tags/$nvflat.tar.gz" &&
+            curl -fsI -o /dev/null "https://download.nvidia.com/XFree86/Linux-x86_64/$nvflat/NVIDIA-Linux-x86_64-$nvflat.run"; then
+            # the version that built so far stays as the fallback
+            sed -i "s/^_nvprev=.*/_nvprev=$nvcur/; s/^_nvver=.*/_nvver=$nvflat/" "$recipe/ZEXBUILD"
+            echo "$recipe: NVIDIA $nvflat is on Flathub (the recipe has $nvcur)"
+        else
+            echo "$recipe: NVIDIA $nvflat is on Flathub but its modules or driver are not published yet, keeping $nvcur"
+        fi
+    fi
+fi
+
+# linux-surface or NVIDIA changed: the same kernel is built again with a higher pkgrel
 surface_changed=$(git status --porcelain -- "$recipe" | grep -c . || true)
 
 if [ -z "$new" ] && [ "$surface_changed" = 0 ]; then
-    echo "$recipe: Linux $cur is the newest and linux-surface has not changed"
+    echo "$recipe: Linux $cur is the newest, and linux-surface and NVIDIA have not changed"
     echo "version=" >> "$out"
     exit 0
 fi
 [ -n "$new" ] && echo "$recipe: Linux $new is out (the recipe has $cur)"
-[ "$surface_changed" != 0 ] && echo "$recipe: linux-surface patches changed"
+[ "$surface_changed" != 0 ] && echo "$recipe: linux-surface patches or the NVIDIA version changed"
 
 tarball="linux-$target.tar.xz"
 curl -fsSL -o "$tmp/$tarball" "https://cdn.kernel.org/pub/linux/kernel/v${target%%.*}.x/$tarball"
