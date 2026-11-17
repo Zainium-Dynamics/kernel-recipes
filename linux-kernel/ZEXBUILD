@@ -24,6 +24,7 @@ source="https://github.com/torvalds/linux/archive/refs/tags/v$_srcver.tar.gz
 0002-zainium-module-dir.patch
 0003-ovl-sealed-mount-option.patch
 0004-ovl-sealed-upper-changes.patch
+0005-objtool-sigaltstack-size.patch
 zainium.config
 zainium-ipe.pol
 nvidia.conf"
@@ -51,7 +52,8 @@ build() {
 	RUSTFLAGS="-C target-feature=-crt-static" cargo install --locked --root "$SRCDIR/bindgen" bindgen-cli
 	export PATH="$SRCDIR/bindgen/bin:$PATH"
 
-	for p in 0001-zainium-system-paths.patch 0002-zainium-module-dir.patch 0003-ovl-sealed-mount-option.patch 0004-ovl-sealed-upper-changes.patch; do
+	for p in 0001-zainium-system-paths.patch 0002-zainium-module-dir.patch 0003-ovl-sealed-mount-option.patch 0004-ovl-sealed-upper-changes.patch \
+		0005-objtool-sigaltstack-size.patch; do
 		patch -p1 < "$SRCDIR/$p"
 	done
 	# TEST BRANCH: vanilla 7.4-rc3 plus Zainium's paths and the OverlayFS RFC series only;
