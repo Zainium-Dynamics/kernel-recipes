@@ -1,0 +1,177 @@
+From 07329659d4041d96909fda8c2ce8f8e544bb879d Mon Sep 17 00:00:00 2001
+From: Ali Zain <alizain@zainiumdynamics.tech>
+Date: Wed, 18 Nov 2026 00:06:05 +0500
+Subject: [RFC PATCH 2/2] ovl: show changes made directly to the upper layer of
+ a sealed overlay
+
+With a sealed overlay, the base is read-only for good, but the system
+still needs a way to add software to it: a package manager, the only
+writer, installs into the upper layer directly, and the new files must
+show up in the mounted overlay without a remount or a reboot.
+
+Today that is undefined behaviour, and in practice new files stay hidden
+behind negative dentries and cached merged directory listings.  On a
+sealed overlay, nothing writes to the upper layer through the overlay, so
+the overlay itself never races with that writer, and it can afford to
+look again:
+
+ - every dentry is revalidated; a negative dentry, or one without an upper
+   alias, is stale once its name exists in the upper parent
+ - a dentry whose upper dentry was unlinked or renamed over is stale
+ - an inode that has an upper is never hashed by its lower inode: a
+   lower-only directory can stay in the inode cache while something
+   under it runs, and a lookup that found it by the lower inode would
+   fail with ESTALE for as long as it is in use
+ - merged directory listings are not cached
+
+Changes to the lower layers stay undefined.
+
+Signed-off-by: Ali Zain <alizain@zainiumdynamics.tech>
+---
+ Documentation/filesystems/overlayfs.rst |  9 +++++
+ fs/overlayfs/inode.c                    |  7 ++++
+ fs/overlayfs/readdir.c                  |  3 +-
+ fs/overlayfs/super.c                    | 47 +++++++++++++++++++++++++
+ fs/overlayfs/util.c                     |  2 ++
+ 5 files changed, 67 insertions(+), 1 deletion(-)
+
+diff --git a/Documentation/filesystems/overlayfs.rst b/Documentation/filesystems/overlayfs.rst
+index dd285a2..5f0bf3e 100644
+--- a/Documentation/filesystems/overlayfs.rst
++++ b/Documentation/filesystems/overlayfs.rst
+@@ -890,6 +890,15 @@ This is enabled with the "sealed" mount option.  A sealed overlay is
+ read-only for good: it is mounted read-only and cannot be remounted
+ read-write, so nothing writes to its layers through the overlay.
+ 
++The upper layer is still part of the stack, and it may be changed directly
++by a trusted writer while the overlay is mounted, for example by a package
++manager installing into it.  This is an exception to the rule in "Changes
++to underlying filesystems": to show such changes, a sealed overlay checks
++negative dentries and dentries that have no upper alias against the upper
++layer on lookup, drops dentries whose upper was removed or replaced, does
++not hash an inode that has an upper by its lower inode, and does not cache
++merged directory listings.  Changing the lower layers is still undefined.
++
+ A sealed overlay that has an upper layer still needs a work directory.
+ 
+ 
+diff --git a/fs/overlayfs/inode.c b/fs/overlayfs/inode.c
+index f1c6df3..ebb78c1 100644
+--- a/fs/overlayfs/inode.c
++++ b/fs/overlayfs/inode.c
+@@ -1191,6 +1191,13 @@ static bool ovl_hash_bylower(struct super_block *sb, struct dentry *upper,
+ 	if (!lower)
+ 		return false;
+ 
++	/*
++	 * No, if sealed: the upper may appear while the lower-only inode is
++	 * in use, and the two must not be taken for one inode
++	 */
++	if (ofs->config.sealed && upper)
++		return false;
++
+ 	/* Yes, if already indexed */
+ 	if (index)
+ 		return true;
+diff --git a/fs/overlayfs/readdir.c b/fs/overlayfs/readdir.c
+index 4cd4af0..12986f9 100644
+--- a/fs/overlayfs/readdir.c
++++ b/fs/overlayfs/readdir.c
+@@ -509,7 +509,8 @@ static struct ovl_dir_cache *ovl_dir_cache_get(struct file *file)
+ 	struct inode *inode = d_inode(dentry);
+ 
+ 	cache = ovl_dir_cache_check(inode, true);
+-	if (cache && ovl_inode_version_get(inode) == cache->version) {
++	if (cache && ovl_inode_version_get(inode) == cache->version &&
++	    !OVL_FS(dentry->d_sb)->config.sealed) {
+ 		WARN_ON(!cache->refcount);
+ 		cache->refcount++;
+ 		return cache;
+diff --git a/fs/overlayfs/super.c b/fs/overlayfs/super.c
+index 7078f4c..bbd1c2b 100644
+--- a/fs/overlayfs/super.c
++++ b/fs/overlayfs/super.c
+@@ -120,6 +120,40 @@ static int ovl_revalidate_real(struct dentry *d, unsigned int flags, bool weak)
+ 	return ret;
+ }
+ 
++/*
++ * A sealed overlay never writes to its upper layer, but the upper layer may
++ * be changed directly by a trusted writer.  A negative dentry, or a dentry
++ * without an upper alias, is stale once its name shows up in the upper parent.
++ */
++static int ovl_sealed_revalidate(struct dentry *dentry, unsigned int flags)
++{
++	struct dentry *parent, *upperdir, *this;
++	struct name_snapshot n;
++	int ret = 1;
++
++	if (flags & LOOKUP_RCU)
++		return -ECHILD;
++
++	parent = dget_parent(dentry);
++	upperdir = ovl_dentry_upper(parent);
++	if (upperdir) {
++		if (!take_dentry_name_snapshot(&n, dentry)) {
++			dput(parent);
++			return 0;
++		}
++		this = lookup_noperm_positive_unlocked(&n.name, upperdir);
++		release_dentry_name_snapshot(&n);
++		if (!IS_ERR(this)) {
++			dput(this);
++			ret = 0;
++		} else if (PTR_ERR(this) != -ENOENT) {
++			ret = PTR_ERR(this);
++		}
++	}
++	dput(parent);
++	return ret;
++}
++
+ static int ovl_dentry_revalidate_common(struct dentry *dentry,
+ 					unsigned int flags, bool weak)
+ {
+@@ -131,6 +165,8 @@ static int ovl_dentry_revalidate_common(struct dentry *dentry,
+ 	int ret = 1;
+ 
+ 	if (!inode) {
++		if (OVL_FS(dentry->d_sb)->config.sealed)
++			return ovl_sealed_revalidate(dentry, flags);
+ 		/*
+ 		 * Lookup of negative dentries will call ovl_dentry_init_flags()
+ 		 * with NULL upperdentry and NULL oe, resulting in the
+@@ -145,6 +181,17 @@ static int ovl_dentry_revalidate_common(struct dentry *dentry,
+ 	oe = OVL_I_E(inode);
+ 	lowerstack = ovl_lowerstack(oe);
+ 	upper = ovl_i_dentry_upper(inode);
++	if (OVL_FS(dentry->d_sb)->config.sealed) {
++		/* a name that showed up in the upper layer needs a new lookup */
++		if (!upper) {
++			ret = ovl_sealed_revalidate(dentry, flags);
++			if (ret <= 0)
++				return ret;
++		}
++		/* so does one whose upper was removed or renamed over */
++		if (upper && !weak && d_unhashed(upper))
++			return flags & LOOKUP_RCU ? -ECHILD : 0;
++	}
+ 	if (upper)
+ 		ret = ovl_revalidate_real(upper, flags, weak);
+ 
+diff --git a/fs/overlayfs/util.c b/fs/overlayfs/util.c
+index fd4b1fc..c9138c3 100644
+--- a/fs/overlayfs/util.c
++++ b/fs/overlayfs/util.c
+@@ -192,6 +192,8 @@ void ovl_dentry_init_flags(struct dentry *dentry, struct dentry *upperdentry,
+ 		flags |= upperdentry->d_flags;
+ 	for (i = 0; i < ovl_numlower(oe) && lowerstack[i].dentry; i++)
+ 		flags |= lowerstack[i].dentry->d_flags;
++	if (OVL_FS(dentry->d_sb)->config.sealed)
++		flags |= DCACHE_OP_REVALIDATE;
+ 
+ 	spin_lock(&dentry->d_lock);
+ 	dentry->d_flags &= ~mask;
+-- 
+2.56.0
+

@@ -3,7 +3,7 @@
 
 [package]
 name             = "linux-kernel"
-version          = "7.3.4"
+version          = "7.4_rc3"
 description      = "Linux kernel"
 license          = "GPL-2.0-only"
 maintainer       = "Zainium Dynamics <alizain@zainiumdynamics.tech>"
