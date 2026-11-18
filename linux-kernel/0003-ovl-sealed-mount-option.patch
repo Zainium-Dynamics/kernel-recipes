@@ -1,0 +1,124 @@
+From a126ee1612eccdf9621adced230fabd81add365f Mon Sep 17 00:00:00 2001
+From: Ali Zain <alizain@zainiumdynamics.tech>
+Date: Wed, 18 Nov 2026 00:05:51 +0500
+Subject: [RFC PATCH 1/2] ovl: add a sealed mount option
+
+An image-based system wants its base to stay read-only for every caller,
+root included.  A plain read-only overlay with an upper layer can be
+remounted read-write by any process with CAP_SYS_ADMIN in the mount's
+user namespace, which writes through to the upper layer.
+
+Add the "sealed" option.  A sealed overlay is mounted read-only and
+refuses to be remounted read-write, using the same path that already
+keeps an overlay without an upper layer or work directory read-only.
+
+Signed-off-by: Ali Zain <alizain@zainiumdynamics.tech>
+---
+ Documentation/filesystems/overlayfs.rst | 10 ++++++++++
+ fs/overlayfs/overlayfs.h                |  2 +-
+ fs/overlayfs/ovl_entry.h                |  1 +
+ fs/overlayfs/params.c                   |  7 +++++++
+ fs/overlayfs/super.c                    |  2 +-
+ 5 files changed, 20 insertions(+), 2 deletions(-)
+
+diff --git a/Documentation/filesystems/overlayfs.rst b/Documentation/filesystems/overlayfs.rst
+index e01f781..dd285a2 100644
+--- a/Documentation/filesystems/overlayfs.rst
++++ b/Documentation/filesystems/overlayfs.rst
+@@ -883,6 +883,16 @@ not crashed and contents of upperdir are intact, the "volatile" directory
+ can be removed.
+ 
+ 
++Sealed mount
++------------
++
++This is enabled with the "sealed" mount option.  A sealed overlay is
++read-only for good: it is mounted read-only and cannot be remounted
++read-write, so nothing writes to its layers through the overlay.
++
++A sealed overlay that has an upper layer still needs a work directory.
++
++
+ User xattr
+ ----------
+ 
+diff --git a/fs/overlayfs/overlayfs.h b/fs/overlayfs/overlayfs.h
+index 646f8ff..13b1336 100644
+--- a/fs/overlayfs/overlayfs.h
++++ b/fs/overlayfs/overlayfs.h
+@@ -967,7 +967,7 @@ int ovl_fill_super(struct super_block *sb, struct fs_context *fc);
+ /* Will this overlay be forced to mount/remount ro? */
+ static inline bool ovl_force_readonly(struct ovl_fs *ofs)
+ {
+-	return (!ovl_upper_mnt(ofs) || !ofs->workdir);
++	return (!ovl_upper_mnt(ofs) || !ofs->workdir || ofs->config.sealed);
+ }
+ 
+ /* xattr.c */
+diff --git a/fs/overlayfs/ovl_entry.h b/fs/overlayfs/ovl_entry.h
+index 5b2f1b9..1fd2fa2 100644
+--- a/fs/overlayfs/ovl_entry.h
++++ b/fs/overlayfs/ovl_entry.h
+@@ -19,6 +19,7 @@ struct ovl_config {
+ 	bool metacopy;
+ 	bool userxattr;
+ 	int fsync_mode;
++	bool sealed;
+ };
+ 
+ struct ovl_sb {
+diff --git a/fs/overlayfs/params.c b/fs/overlayfs/params.c
+index d1ca4a9..ac5f92f 100644
+--- a/fs/overlayfs/params.c
++++ b/fs/overlayfs/params.c
+@@ -60,6 +60,7 @@ enum ovl_opt {
+ 	Opt_verity,
+ 	Opt_fsync,
+ 	Opt_volatile,
++	Opt_sealed,
+ 	Opt_override_creds,
+ };
+ 
+@@ -194,6 +195,7 @@ const struct fs_parameter_spec ovl_parameter_spec[] = {
+ 	fsparam_enum("verity",              Opt_verity, ovl_parameter_verity),
+ 	fsparam_enum("fsync",               Opt_fsync, ovl_parameter_fsync),
+ 	fsparam_flag("volatile",            Opt_volatile),
++	fsparam_flag("sealed",              Opt_sealed),
+ 	fsparam_flag_no("override_creds",   Opt_override_creds),
+ 	{}
+ };
+@@ -707,6 +709,9 @@ static int ovl_parse_param(struct fs_context *fc, struct fs_parameter *param)
+ 	case Opt_volatile:
+ 		config->fsync_mode = OVL_FSYNC_VOLATILE;
+ 		break;
++	case Opt_sealed:
++		config->sealed = true;
++		break;
+ 	case Opt_userxattr:
+ 		config->userxattr = true;
+ 		break;
+@@ -1151,6 +1156,8 @@ int ovl_show_options(struct seq_file *m, struct dentry *dentry)
+ 		seq_printf(m, ",fsync=%s", ovl_fsync_mode(&ofs->config));
+ 	if (ofs->config.userxattr)
+ 		seq_puts(m, ",userxattr");
++	if (ofs->config.sealed)
++		seq_puts(m, ",sealed");
+ 	if (ofs->config.verity_mode != ovl_verity_mode_def())
+ 		seq_printf(m, ",verity=%s",
+ 			   ovl_verity_mode(&ofs->config));
+diff --git a/fs/overlayfs/super.c b/fs/overlayfs/super.c
+index e61aab1..7078f4c 100644
+--- a/fs/overlayfs/super.c
++++ b/fs/overlayfs/super.c
+@@ -1527,7 +1527,7 @@ static int ovl_fill_super_creds(struct fs_context *fc, struct super_block *sb)
+ 		return err;
+ 
+ 	/* If the upper fs is nonexistent, we mark overlayfs r/o too */
+-	if (!ovl_upper_mnt(ofs))
++	if (!ovl_upper_mnt(ofs) || ofs->config.sealed)
+ 		sb->s_flags |= SB_RDONLY;
+ 
+ 	if (ovl_has_fsid(ofs) && ovl_upper_mnt(ofs)) {
+-- 
+2.56.0
+

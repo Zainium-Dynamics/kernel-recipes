@@ -1,11 +1,13 @@
 maintainer="Zainium Dynamics <alizain@zainiumdynamics.tech>"
 pkgname=linux-kernel
-pkgver=7.3.4
-pkgrel=1
+pkgver=7.4_rc3
+pkgrel=0
+# TEST BRANCH: 7.4-rc3 with the OverlayFS RFC series as sent upstream. Not for master.
+_srcver=7.4-rc3
 # the one place the kernel's name is set: the image is kernel/$_kernel and the release
 # $_kernel-<major>.<minor>, so the module dir and boot paths stay the same across point releases
 _kernel=linux-zainium
-_krel="$_kernel-${pkgver%.*}"
+_krel="$_kernel-7.4"
 # NVIDIA's open kernel modules (RTX 20 series and newer), built here so they are signed with
 # this kernel's key; their GSP firmware comes from the driver of the same version. Flatpak
 # apps get the matching userspace from Flathub's GL.nvidia extension.
@@ -17,32 +19,15 @@ subpackages="linux-kernel-modules linux-headers"
 # GNU sed: AppArmor's capability names are generated with sed's \L, which BusyBox sed
 # writes as a literal "L" ("LCHOWN"), so the parser could not match any capability
 makedepends="bash clang-dev flex bison bc perl python3 gawk sed rsync findutils diffutils coreutils tar xz zstd cpio kmod elfutils-dev openssl openssl-dev pahole linux-headers qemu-system-x86_64"
-source="https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-$pkgver.tar.xz
+source="https://github.com/torvalds/linux/archive/refs/tags/v$_srcver.tar.gz
 0001-zainium-system-paths.patch
 0002-zainium-module-dir.patch
-0003-ovl-sealed-mount.patch
-surface-0002-surface3.patch
-surface-0003-mwifiex.patch
-surface-0004-ath10k.patch
-surface-0005-ipts.patch
-surface-0006-ithc.patch
-surface-0007-surface-sam.patch
-surface-0008-surface-sam-over-hid.patch
-surface-0009-surface-button.patch
-surface-0010-surface-typecover.patch
-surface-0011-surface-shutdown.patch
-surface-0012-surface-gpe.patch
-surface-0013-cameras.patch
-surface-0014-amd-gpio.patch
-surface-0015-hid-surface.patch
+0003-ovl-sealed-mount-option.patch
+0004-ovl-sealed-upper-changes.patch
+0005-objtool-sigaltstack-size.patch
 zainium.config
-surface.config
 zainium-ipe.pol
-nvidia.conf
-https://github.com/NVIDIA/open-gpu-kernel-modules/archive/refs/tags/$_nvver.tar.gz
-https://download.nvidia.com/XFree86/Linux-x86_64/$_nvver/NVIDIA-Linux-x86_64-$_nvver.run
-https://github.com/NVIDIA/open-gpu-kernel-modules/archive/refs/tags/$_nvprev.tar.gz
-https://download.nvidia.com/XFree86/Linux-x86_64/$_nvprev/NVIDIA-Linux-x86_64-$_nvprev.run"
+nvidia.conf"
 
 # Vanilla Linux with Zainium's system paths (firmware, shebangs, init, modprobe, poweroff)
 # and the modules under /overlayer/syshub; the release name is given to make (kmake).
@@ -55,7 +40,7 @@ kmake() {
 }
 
 build() {
-	cd "$SRCDIR/linux-$pkgver"
+	cd "$SRCDIR/linux-$_srcver"
 	# the musl loader flags ci/build.sh exports are for userland, not the kernel; with the Rust
 	# one bindgen would run on Zainium's loader and could not find libstdc++ for Alpine's libclang;
 	# it also has to be linked dynamically, a static musl bindgen cannot dlopen libclang
@@ -67,18 +52,14 @@ build() {
 	RUSTFLAGS="-C target-feature=-crt-static" cargo install --locked --root "$SRCDIR/bindgen" bindgen-cli
 	export PATH="$SRCDIR/bindgen/bin:$PATH"
 
-	for p in 0001-zainium-system-paths.patch 0002-zainium-module-dir.patch 0003-ovl-sealed-mount.patch; do
+	for p in 0001-zainium-system-paths.patch 0002-zainium-module-dir.patch 0003-ovl-sealed-mount-option.patch 0004-ovl-sealed-upper-changes.patch \
+		0005-objtool-sigaltstack-size.patch; do
 		patch -p1 < "$SRCDIR/$p"
 	done
-	# Microsoft Surface support from linux-surface (patches/7.3 and configs/surface-7.3.config,
-	# github.com/linux-surface/linux-surface), without 0001-secureboot: it reverts the PE
-	# header's NX flag and adds a lockdown bypass for hibernation
-	for p in "$SRCDIR"/surface-0*.patch; do
-		patch -p1 < "$p"
-	done
+	# TEST BRANCH: vanilla 7.4-rc3 plus Zainium's paths and the OverlayFS RFC series only;
+	# no Surface patches and no NVIDIA modules
 
 	cp "$SRCDIR/zainium.config" .config
-	cat "$SRCDIR/surface.config" >> .config
 	# IPE's boot policy is compiled in: no signing key, and it goes wherever this kernel goes
 	cp "$SRCDIR/zainium-ipe.pol" zainium-ipe.pol
 	# desktop speed on top of Zainium's config: transparent hugepages, zstd for zram, no
@@ -111,7 +92,6 @@ build() {
 	# generic x86-64, so it runs on any 64-bit CPU like the rest of the base, and -O3
 	kmake -j"$(nproc)" KCFLAGS="-O3" bzImage modules
 	_boot_test
-	_nvidia_build
 }
 
 # NVIDIA's open modules against this tree: $_nvver, or $_nvprev when the new one does not
@@ -119,7 +99,7 @@ build() {
 _nvidia_build() {
 	for v in "$_nvver" "$_nvprev"; do
 		if (cd "$SRCDIR/open-gpu-kernel-modules-$v" && make -j"$(nproc)" modules \
-			SYSSRC="$SRCDIR/linux-$pkgver" SYSOUT="$SRCDIR/linux-$pkgver" KERNEL_UNAME="$_krel"); then
+			SYSSRC="$SRCDIR/linux-$_srcver" SYSOUT="$SRCDIR/linux-$_srcver" KERNEL_UNAME="$_krel"); then
 			echo "$v" > "$SRCDIR/nvidia-built"
 			[ "$v" = "$_nvver" ] || echo "WARNING: NVIDIA $_nvver does not build on $pkgver, shipping $v" >&2
 			return 0
@@ -254,7 +234,9 @@ int main(void)
 EOF
 	cc -static -O2 -o "$t/init" "$t/init.c"
 	printf 'dir /dev 0755 0 0\nnod /dev/console 0600 0 0 c 5 1\nfile /quantra-ramfs %s 0755 0 0\n' "$t/init" > "$t/list"
-	usr/gen_init_cpio "$t/list" | gzip -9 > "$t/initrd.gz"
+	# 7.4 moved gen_init_cpio from usr/ to scripts/
+	cpio=usr/gen_init_cpio; [ -x "$cpio" ] || cpio=scripts/gen_init_cpio
+	"$cpio" "$t/list" | gzip -9 > "$t/initrd.gz"
 
 	timeout 900 qemu-system-x86_64 -m 1024 -smp 2 -cpu qemu64 -nographic -no-reboot \
 		-kernel arch/x86/boot/bzImage -initrd "$t/initrd.gz" \
@@ -282,7 +264,7 @@ EOF
 # the kernel image only: `zex kernel` puts it on the ESP, where Limine boots it.
 # linux-panic is the fallback entry's kernel (the boot menu's "Fallback Kernel"), as in zaisys
 package() {
-	cd "$SRCDIR/linux-$pkgver"
+	cd "$SRCDIR/linux-$_srcver"
 	mkdir -p "$PAYLOAD_DIR/kernel"
 	cp arch/x86/boot/bzImage "$PAYLOAD_DIR/kernel/$_kernel"
 	cp arch/x86/boot/bzImage "$PAYLOAD_DIR/kernel/linux-panic"
@@ -290,7 +272,7 @@ package() {
 
 # the modules for the base (drivers/modules/<release>), staged by `zex kernel` after asking
 modules() {
-	cd "$SRCDIR/linux-$pkgver"
+	cd "$SRCDIR/linux-$_srcver"
 	kmake INSTALL_MOD_PATH="$PAYLOAD_DIR" INSTALL_MOD_STRIP=1 DEPMOD=true modules_install
 	mods="$PAYLOAD_DIR/overlayer/syshub/drivers/modules/$_krel"
 	rm -f "$mods/build" "$mods/source"
@@ -335,7 +317,7 @@ _nvidia_install() {
 # the kernel's userspace API headers, from the same tree, for the userland
 # (/overlayer/zexlib/union/include)
 linux_headers() {
-	cd "$SRCDIR/linux-$pkgver"
+	cd "$SRCDIR/linux-$_srcver"
 	kmake INSTALL_HDR_PATH="$PAYLOAD_DIR" headers_install
 	find "$PAYLOAD_DIR" \( -name .install -o -name ..install.cmd \) -exec rm -f {} +
 	# substrate allows no /usr in a package; in the headers it is only comments
