@@ -234,7 +234,9 @@ int main(void)
 EOF
 	cc -static -O2 -o "$t/init" "$t/init.c"
 	printf 'dir /dev 0755 0 0\nnod /dev/console 0600 0 0 c 5 1\nfile /quantra-ramfs %s 0755 0 0\n' "$t/init" > "$t/list"
-	usr/gen_init_cpio "$t/list" | gzip -9 > "$t/initrd.gz"
+	# 7.4 moved gen_init_cpio from usr/ to scripts/
+	cpio=usr/gen_init_cpio; [ -x "$cpio" ] || cpio=scripts/gen_init_cpio
+	"$cpio" "$t/list" | gzip -9 > "$t/initrd.gz"
 
 	timeout 900 qemu-system-x86_64 -m 1024 -smp 2 -cpu qemu64 -nographic -no-reboot \
 		-kernel arch/x86/boot/bzImage -initrd "$t/initrd.gz" \
